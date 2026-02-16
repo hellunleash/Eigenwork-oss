@@ -1,0 +1,519 @@
+"use client";
+
+export const dynamic = "force-dynamic";
+
+import { useCallback, useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import Script from "next/script";
+import { signOut, onAuthStateChanged } from "firebase/auth";
+import { mutate as swrMutate } from "swr";
+import { auth } from "@/lib/firebase";
+import { usePageTitle } from "@/lib/use-page-title";
+import { useDashboardData } from "@/lib/use-dashboard-data";
+
+declare global {
+  interface Window {
+    Paddle?: {
+      Environment: { set: (env: string) => void };
+      Initialize: (opts: { token: string }) => void;
+      Checkout: {
+        open: (opts: {
+          items: Array<{ priceId: string; quantity: number }>;
+          customData?: Record<string, string>;
+        }) => void;
+      };
+    };
+  }
+}
+
+type Pipeline = {
+  id: string;
+  title: string;
+  createdAt: number | null;
+  submissionCap: number;
+  isClosed: boolean;
+  appliedCount: number;
+  hasMatchResult?: boolean;
+};
+
+export default function UserDashboardPage() {
+  usePageTitle("Dashboard");
+  const router = useRouter();
+  const [authChecking, setAuthChecking] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [creditsModal, setCreditsModal] = useState(false);
+  const [creditsQuantity, setCreditsQuantity] = useState(10);
+  const [creditsLoading, setCreditsLoading] = useState(false);
+  const [generateModal, setGenerateModal] = useState<Pipeline | null>(null);
+  const [generateLoading, setGenerateLoading] = useState(false);
+  const [deleteModal, setDeleteModal] = useState<Pipeline | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [paddleReady, setPaddleReady] = useState(false);
+  const paddleInitRef = useRef(false);
+
+  // Use the SWR-based dashboard data hook
+  const { pipelines, eigenCredits, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        router.replace("/");
+        return;
+      }
+      setAuthChecking(false);
+      setUserId(user.uid);
+    });
+    return () => unsub();
+  }, [router]);
+
+  const handlePaddleLoad = useCallback(() => {
+    if (typeof window === "undefined" || !window.Paddle || paddleInitRef.current) return;
+    const token = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
+    if (!token) {
+      console.error("NEXT_PUBLIC_PADDLE_CLIENT_TOKEN is not set");
+      return;
+    }
+    paddleInitRef.current = true;
+    window.Paddle.Environment.set("production");
+    window.Paddle.Initialize({ token });
+    setPaddleReady(true);
+  }, []);
+
+  const handleBuyCreditsProceed = async () => {
+    const user = auth.currentUser;
+    if (!user) return alert("Please sign in.");
+    if (!window.Paddle?.Checkout) {
+      alert("Checkout is loading. Please try again in a moment.");
+      return;
+    }
+    const qty = Math.max(1, Math.floor(creditsQuantity));
+    setCreditsLoading(true);
+    try {
+      const res = await fetch("/api/paddle/config");
+      if (!res.ok) throw new Error("Failed to load checkout config");
+      const { priceId } = await res.json();
+      if (!priceId || typeof priceId !== "string") throw new Error("Price not configured");
+      window.Paddle.Checkout.open({
+        items: [{ priceId, quantity: qty }],
+        customData: { userId: user.uid },
+      });
+      setCreditsModal(false);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Checkout failed");
+    } finally {
+      setCreditsLoading(false);
+    }
+  };
+
+  const handleCopyIntakeLink = (jobId: string) => {
+    const url = typeof window !== "undefined" ? `${window.location.origin}/candidate?jobId=${jobId}` : "";
+    navigator.clipboard.writeText(url).then(
+      () => alert("Intake link copied to clipboard."),
+      () => alert("Could not copy. Please copy the link manually.")
+    );
+  };
+
+  const submissionRatio = (p: Pipeline) => (p.submissionCap > 0 ? p.appliedCount / p.submissionCap : 0);
+
+  const handleGenerateContinue = async () => {
+    if (!generateModal) return;
+    setGenerateLoading(true);
+    try {
+      const res = await fetch(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`);
+      if (!res.ok) throw new Error("Request failed");
+      const closeRes = await fetch("/api/jd/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: generateModal.id }),
+      });
+      if (!closeRes.ok) throw new Error("Failed to close pipeline");
+      setGenerateModal(null);
+      // Revalidate dashboard data after generating candidates
+      await revalidate();
+      // Invalidate results cache for this jobId so results page shows fresh data
+      await swrMutate(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setGenerateLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push("/");
+    } catch (e) {
+      console.error(e);
+      router.push("/");
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteModal) return;
+    setDeleteLoading(true);
+    try {
+      const res = await fetch(`/api/jd/${encodeURIComponent(deleteModal.id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete");
+      setDeleteModal(null);
+      // Optimistically update cache, then revalidate
+      await mutatePipelines(
+        (current: { pipelines: Pipeline[] } | Pipeline[] | undefined) => {
+          const currentPipelines = Array.isArray(current) 
+            ? current 
+            : (current && 'pipelines' in current ? current.pipelines : []);
+          const filtered = currentPipelines.filter((p: Pipeline) => p.id !== deleteModal.id);
+          // Return in the same format as the API response
+          return { pipelines: filtered };
+        },
+        { revalidate: true }
+      );
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Something went wrong");
+      // Revalidate on error to ensure cache is correct
+      await revalidate();
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
+        <p className="text-gray-500 text-sm">Checking authentication…</p>
+      </div>
+    );
+  }
+
+  // Only show loading if we truly have no data (first load)
+  // Never show loading during revalidation - always preserve cached data
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
+        <p className="text-gray-500 text-sm">Loading pipelines…</p>
+      </div>
+    );
+  }
+
+  // Only show error if we have no cached data to display
+  if (error && pipelines.length === 0 && eigenCredits === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
+        <p className="text-red-600 text-sm mb-4">{error}</p>
+        <button
+          type="button"
+          onClick={() => revalidate()}
+          className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Script
+        src="https://cdn.paddle.com/paddle/v2/paddle.js"
+        strategy="lazyOnload"
+        onLoad={handlePaddleLoad}
+      />
+      <div className="border-b border-gray-200 bg-white">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+          <h1 className="text-4xl md:text-[2.8125rem] font-bold text-gray-900 tracking-tight">
+            EigenWork
+          </h1>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium">
+              EigenCredits: {eigenCredits}
+            </span>
+            <Link
+              href="/pricing"
+              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+            >
+              Pricing
+            </Link>
+            <button
+              type="button"
+              onClick={() => setCreditsModal(true)}
+              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+            >
+              Buy EigenCredits
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors shrink-0"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* EigenCredits warning banner */}
+      {eigenCredits === 0 && pipelines.length > 0 && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="max-w-3xl mx-auto px-4 py-3 sm:px-6">
+            <div className="flex items-start gap-3">
+              <span className="text-amber-600 text-lg shrink-0">⚠️</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-amber-900">
+                  Your intake links are paused
+                </p>
+                <p className="text-sm text-amber-700 mt-0.5">
+                  Add EigenCredits to resume accepting candidate applications. Your intake links remain valid and will automatically reactivate when you add credits.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCreditsModal(true)}
+                className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors shrink-0"
+              >
+                Add Credits
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6">
+        <header className="mb-8">
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
+            Your Evaluation Pipelines
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Create and manage your role pipelines. Share the intake link to collect and auto-evaluate candidate submissions.
+          </p>
+        </header>
+
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={() => router.push("/user/jd")}
+            className="px-4 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+          >
+            Create New Pipeline
+          </button>
+        </div>
+
+        {pipelines.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
+            <p className="text-gray-600 text-sm mb-4">No pipelines created yet.</p>
+            <button
+              type="button"
+              onClick={() => router.push("/user/jd")}
+              className="px-4 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+            >
+              Start a New Pipeline
+            </button>
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {pipelines.map((p) => {
+              const ratio = submissionRatio(p);
+              const cap = p.submissionCap;
+              const matchingCompleted = p.isClosed || p.hasMatchResult === true;
+              const isWaiting = ratio < 0.6 && !matchingCompleted;
+              const canGenerate = ratio >= 0.6 && !matchingCompleted;
+              const isClosed = matchingCompleted;
+
+              const statusLabel =
+                p.appliedCount === 0
+                  ? "0 submissions yet"
+                  : `${p.appliedCount} candidate${p.appliedCount === 1 ? "" : "s"} evaluated`;
+
+              return (
+                <li
+                  key={p.id}
+                  className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-gray-900 font-medium truncate">{p.title || "Untitled role"}</p>
+                    <p className="text-gray-500 text-xs mt-0.5">
+                      {statusLabel} {cap > 0 ? `(Applicant limit ${cap})` : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    {isWaiting && (
+                      <button
+                        type="button"
+                        disabled
+                        title="This becomes available after 60% of the applicant limit is reached."
+                        className="px-3 py-1.5 text-gray-500 bg-gray-100 rounded-lg text-sm font-medium opacity-50 cursor-not-allowed"
+                      >
+                        Waiting for submissions
+                      </button>
+                    )}
+                    {canGenerate && (
+                      <button
+                        type="button"
+                        onClick={() => setGenerateModal(p)}
+                        className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Generate Top Candidates
+                      </button>
+                    )}
+                    {isClosed && (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/user/jd/results/${p.id}`)}
+                        className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        View Top Candidates
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/user/jd/confirm?jobId=${encodeURIComponent(p.id)}`)}
+                      className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Edit role settings
+                    </button>
+                    <button
+                      type="button"
+                      disabled={eigenCredits <= 0}
+                      title={eigenCredits <= 0 ? "Add EigenCredits to copy intake link" : undefined}
+                      onClick={() => eigenCredits > 0 && handleCopyIntakeLink(p.id)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                        eigenCredits <= 0
+                          ? "text-gray-500 bg-gray-100 opacity-50 cursor-not-allowed"
+                          : "text-gray-700 bg-gray-100 hover:bg-gray-200"
+                      }`}
+                    >
+                      Copy Intake Link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteModal(p)}
+                      className="px-3 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Generate modal */}
+      {generateModal && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => !generateLoading && setGenerateModal(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Generate top candidates now?</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              This will freeze new submissions for this role. Continue and generate the top candidate list?
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                disabled={generateLoading}
+                onClick={() => setGenerateModal(null)}
+                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                Cancel / Wait
+              </button>
+              <button
+                type="button"
+                disabled={generateLoading}
+                onClick={handleGenerateContinue}
+                className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                {generateLoading ? "Generating…" : "Continue"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Buy EigenCredits modal */}
+      {creditsModal && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => !creditsLoading && setCreditsModal(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Buy EigenCredits</h3>
+            <p className="text-sm text-gray-600 mb-4">How many EigenCredits do you want to buy?</p>
+            <input
+              type="number"
+              min={1}
+              value={creditsQuantity}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setCreditsQuantity(Number.isInteger(v) && v >= 1 ? v : 1);
+              }}
+              className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-gray-900 mb-6"
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                disabled={creditsLoading}
+                onClick={() => setCreditsModal(false)}
+                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={creditsLoading}
+                onClick={handleBuyCreditsProceed}
+                className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                {creditsLoading ? "Redirecting…" : "Proceed to Checkout"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete modal */}
+      {deleteModal && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => !deleteLoading && setDeleteModal(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete this pipeline?</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              This will permanently delete the pipeline, all candidate submissions for this role, and their resume files. The intake link will be disabled. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => setDeleteModal(null)}
+                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={handleDeleteConfirm}
+                className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleteLoading ? "Deleting…" : "Delete Permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
