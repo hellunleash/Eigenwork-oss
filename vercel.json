@@ -3,7 +3,6 @@
   "crons": [
     {
       "path": "/api/worker/evaluate",
-      "//": "Vercel Hobby caps cron schedules at once-per-day. Once Cloud Scheduler is configured (see worker/README.md), delete this entire crons[] array — Cloud Scheduler runs the safety-net poll per-minute against the Cloud Run service. Until then, this daily Vercel cron remains as the fallback safety net for the in-Vercel /api/worker/evaluate route.",
       "schedule": "0 6 * * *"
     }
   ]
