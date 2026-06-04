@@ -784,7 +784,17 @@ async function runMatch(
   const jobLocationTypes = toArray(jd.location_type).map(String).map(normalizeLocation).filter(Boolean);
   const jobAuth = (jd.work_auth_requirement as Record<string, boolean> | undefined) ?? {};
 
-  const candidatesSnap = await db.collection("candidates").where("matchData.jobId", "==", jdId).get();
+  // OPTIMIZATION: select only the fields the filter/sort/match pipeline needs.
+  // Each candidate doc can be 20-100KB (the `breakdown` field is the big chunk);
+  // selecting 3 nested fields drops per-doc transfer to ~500 bytes. For a
+  // 10k-candidate pool this turns ~300MB / ~15s into ~5MB / ~2-3s. The top-10
+  // docs are re-fetched in full (10 parallel point reads, ~200ms) right after
+  // the sort.
+  const candidatesSnap = await db
+    .collection("candidates")
+    .where("matchData.jobId", "==", jdId)
+    .select("score", "profile.role_fit", "matchData.authRegions")
+    .get();
   let list: CandidateDoc[] = [];
   candidatesSnap.docs.forEach((d) => {
     const data = d.data() as Omit<CandidateDoc, "id">;
@@ -809,22 +819,60 @@ async function runMatch(
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   const top = list.slice(0, 10);
 
+  // Re-fetch FULL docs for the top 10 only. The minimal scan above didn't
+  // include candidateName, email, phone, full profile (ramp/supervision/
+  // risk_flags), full matchData (workTypes/locations), or resumePath.
+  // Single batched fetch, bounded at ~200ms.
   const top10 = await Promise.all(
     top.map(async (c) => {
-      const resumePath = (c as { resumePath?: unknown }).resumePath;
-      const resumeUrl = await freshResumeUrl(typeof resumePath === "string" ? resumePath : null);
-      return {
-        id: c.id,
-        score: c.score,
-        yoe: c.yoe,
-        profile: c.profile,
-        role_fit: c.profile?.role_fit,
-        candidateName: c.candidateName,
-        email: c.email,
-        phone: c.phone ?? null,
-        matchData: c.matchData,
-        resume_url: resumeUrl,
-      };
+      try {
+        const fullSnap = await db.collection("candidates").doc(c.id).get();
+        if (!fullSnap.exists) {
+          // Candidate deleted between scan and enrichment (rare).
+          return {
+            id: c.id,
+            score: c.score,
+            yoe: c.yoe,
+            profile: c.profile,
+            role_fit: c.profile?.role_fit,
+            candidateName: "",
+            email: "",
+            phone: null,
+            matchData: c.matchData,
+            resume_url: null,
+          };
+        }
+        const full = (fullSnap.data() ?? {}) as Record<string, unknown>;
+        const resumePath = typeof full.resumePath === "string" ? full.resumePath : null;
+        const resumeUrl = await freshResumeUrl(resumePath);
+        const profileObj = full.profile as { role_fit?: unknown; [k: string]: unknown } | undefined;
+        return {
+          id: c.id,
+          score: typeof full.score === "number" ? full.score : c.score,
+          yoe: typeof full.yoe === "number" ? full.yoe : undefined,
+          profile: profileObj,
+          role_fit: profileObj?.role_fit ?? c.profile?.role_fit,
+          candidateName: typeof full.candidateName === "string" ? full.candidateName : "",
+          email: typeof full.email === "string" ? full.email : "",
+          phone: (full.phone as string | null | undefined) ?? null,
+          matchData: full.matchData ?? c.matchData,
+          resume_url: resumeUrl,
+        };
+      } catch (err) {
+        log("warn", "match.top10_enrich_failed", { ...ctx, candidateId: c.id }, err);
+        return {
+          id: c.id,
+          score: c.score,
+          yoe: c.yoe,
+          profile: c.profile,
+          role_fit: c.profile?.role_fit,
+          candidateName: "",
+          email: "",
+          phone: null,
+          matchData: c.matchData,
+          resume_url: null,
+        };
+      }
     })
   );
 
