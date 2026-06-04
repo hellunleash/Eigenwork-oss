@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// =============================================================================
+// EigenWork — Firestore security rules
+// =============================================================================
+//
+// THREAT MODEL
+//   The Firebase web client config (NEXT_PUBLIC_FIREBASE_API_KEY,
+//   NEXT_PUBLIC_FIREBASE_PROJECT_ID, etc.) ships in the browser bundle and is
+//   therefore public. Anyone can lift it from view-source, install the
+//   Firebase JS SDK in a script, sign in with their own Google account, and
+//   then hit Firestore directly with our project's credentials.
+//
+//   The previous rule -
+//
+//     allow read, write: if request.auth != null;
+//
+//   - meant any Google-authenticated user (free signup, takes seconds) could:
+//     * read every candidates/* doc (names, emails, phones, resumePath,
+//       ETI scores, breakdowns) across every customer,
+//     * read every jds/* doc (including cached matchResult.top10 with PII),
+//     * read every users/* doc (every founder's credit balance),
+//     * write any doc, including users/{their_uid}.eigenCredits = 999999
+//       for unlimited free credits,
+//     * delete any doc, including all of them in a loop.
+//
+//   The Firestore API enforcement we added (whitelists, owner checks,
+//   accessTokens) lived on the API surface. It did not protect against
+//   direct client-SDK access that bypasses the API entirely.
+//
+// ARCHITECTURE
+//   All EigenWork data access goes through Next.js API routes that use the
+//   Firebase Admin SDK (lib/firebase-admin.ts), which bypasses these rules.
+//   No client file imports `db` from lib/firebase.ts -- verified by grep on
+//   2026-06-03. The browser only uses Firebase Auth for Google sign-in,
+//   which does not need Firestore rule permission.
+//
+//   Therefore the safest possible rule set -- deny all client-SDK access --
+//   breaks nothing in the app while closing the entire client-side attack
+//   surface.
+//
+// CHANGING THIS FILE
+//   Do NOT loosen these rules without an explicit threat-model review.
+//   If a future feature genuinely needs client-side reads (e.g. a real-time
+//   onSnapshot feed that bypasses the API), add a narrowly-scoped match
+//   block ABOVE the default deny. Never widen the default.
+//
+// DEPLOY
+//   firebase deploy --only firestore:rules
+//   (or paste this entire file into Firebase Console -> Firestore -> Rules
+//   and click Publish.)
+//
+// LAST REVIEWED
+//   2026-06-03 — see bugs-fixed/security.txt entry of the same date.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

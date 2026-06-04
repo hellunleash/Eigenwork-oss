@@ -1,6 +1,23 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { cleanAndParseJSON } from "@/lib/eti/rubric-compress";
+import { requireFirebaseUser } from "@/lib/auth-server";
+import { allowRequest } from "@/lib/rate-limit";
+import { getRequestId, log, timeMs } from "@/lib/server-logger";
+
+// JD length cap. Realistic job descriptions are 1-10k chars; very long ones
+// (with full company description + benefits + mission) reach ~15k. 50k is
+// roughly 12,500 words / 25 pages of plain text — 5-10x the longest
+// legitimate JD anyone writes. The cap is purely an abuse / accidental-dump
+// guard; no real founder should ever hit it.
+const MAX_JD_CHARS = 50_000;
+
+// Per-authenticated-user rate limit. Generous: a founder typically parses
+// a JD 1-3 times during the create flow. 30/min still leaves room for
+// experimentation while keeping a single account from draining Gemini
+// quota for everyone else.
+const PER_USER_PARSE_LIMIT = 30;
+const PER_USER_PARSE_WINDOW_SECONDS = 60;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -68,21 +85,78 @@ async function parseJDWithLLM(text: string): Promise<{
 }
 
 export async function POST(req: Request) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/jd/parse";
   try {
-    const { jd} = await req.json();
+    const auth = await requireFirebaseUser(req.headers);
+    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-    if (!jd) {
+    // Per-user rate limit on the Gemini call. Skipped on the negative path
+    // (no userId) — that path can't reach the Gemini call anyway.
+    const rl = await allowRequest({
+      key: `jd_parse:${auth.userId}`,
+      limit: PER_USER_PARSE_LIMIT,
+      windowSeconds: PER_USER_PARSE_WINDOW_SECONDS,
+    });
+    if (!rl.allowed) {
+      log("warn", "rate_limit.jd_parse_blocked", {
+        requestId,
+        route,
+        userId: auth.userId,
+        resetAtMs: rl.resetAtMs,
+      });
+      const retryAfterSec = Math.max(
+        1,
+        Math.ceil((rl.resetAtMs - Date.now()) / 1000)
+      );
+      return NextResponse.json(
+        {
+          error: "rate_limited",
+          message:
+            "Too many parse attempts in a short window. Try again shortly.",
+          retryAfter: retryAfterSec,
+        },
+        { status: 429, headers: { "Retry-After": String(retryAfterSec) } }
+      );
+    }
+
+    const { jd } = await req.json();
+
+    if (!jd || typeof jd !== "string") {
       return NextResponse.json(
         { error: "JD text is required" },
         { status: 400 }
       );
     }
 
+    // Length cap. See MAX_JD_CHARS rationale at top of file — this is an
+    // abuse backstop, not a content-compression demand. Real JDs never
+    // reach this size.
+    if (jd.length > MAX_JD_CHARS) {
+      log("warn", "jd.too_long", {
+        requestId,
+        route,
+        userId: auth.userId,
+        chars: jd.length,
+      });
+      return NextResponse.json(
+        {
+          error: "jd_too_long",
+          message:
+            "Job description is unusually long. Please trim to under 50,000 characters.",
+        },
+        { status: 413 }
+      );
+    }
+
+    const t = timeMs();
     const parsed = await parseJDWithLLM(jd);
+    log("info", "jd.parse_ok", { requestId, route, userId: auth.userId, latencyMs: t() });
     return NextResponse.json({ success: true, data: parsed });
   } catch (err) {
+    log("error", "jd.parse_failed", { requestId, route }, err);
     return NextResponse.json(
-      { error: "Internal server error", details: String(err) },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }

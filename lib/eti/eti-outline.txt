@@ -1,0 +1,8 @@
+ETI RUBRICS
+Junior: ESQ A1–A4 (flow, logic, integration, maturity) from GitHub; PDQ B1–B3 (decision, debugging, speed); NR C1–C2 (specificity, realism). Resume only for PDQ/NR.
+Senior: OM A1–A3 (troubleshooting, deployment, reliability); OD B1–B3 (ownership, complexity, autonomy); PC C1–C3 (alignment, coherence, trajectory). Resume only; ML/Data equivalents.
+Context: Operating profile from scores—ramp, supervision, role_fit one_liner, risk flags. No re-read; no hallucinated tools.
+Overlord: YOE≤3. Rules: timeline, jargon, scope, contradiction, product-desc, ATS. A≥4 or A=3&B≥1→cap 40; A=3→cap 46; else safe.
+
+EVAL: Resume→junior: ESQ(GitHub)+behavioral; senior: one prompt. Raw 0–85→norm 0–100. YOE from dates. Save Firestore.
+MATCH: /api/jd/match?jobId. By jobId; Gemini one_liner→MATCH/ADJACENT/NO; score≥50, auth; sort; top 10.

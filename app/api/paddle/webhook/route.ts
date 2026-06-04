@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { updateUserEigenCredits } from "@/lib/user-credits";
+import { applyCreditMutation, markPaddleTransactionProcessed, makeOpId } from "@/lib/credit-ledger";
+import { getRequestId, log } from "@/lib/server-logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,8 @@ const SIGNATURE_TOLERANCE_SECONDS = 60 * 5; // 5 minutes per Paddle docs
  * Uses Request (not NextRequest) and req.text() to preserve raw body for HMAC verification.
  */
 export async function POST(req: Request) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/paddle/webhook";
   const rawBody = await req.text();
   const signatureHeader = req.headers.get("paddle-signature");
 
@@ -41,6 +44,14 @@ export async function POST(req: Request) {
   const eventType = event.event_type ?? event.occurrence;
   if (eventType === "transaction.completed" || eventType === "transaction.paid") {
     const data = (event.data ?? {}) as Record<string, unknown>;
+    const txnId =
+      (typeof data.id === "string" ? data.id : undefined) ??
+      (typeof (data.transaction as Record<string, unknown> | undefined)?.id === "string"
+        ? String((data.transaction as Record<string, unknown>).id)
+        : undefined) ??
+      (typeof (data.checkout as Record<string, unknown> | undefined)?.id === "string"
+        ? String((data.checkout as Record<string, unknown>).id)
+        : undefined);
     const customData =
       (data.customData as Record<string, unknown> | null | undefined) ??
       ((data as { custom_data?: Record<string, unknown> }).custom_data ?? null) ??
@@ -78,12 +89,27 @@ export async function POST(req: Request) {
 
     if (userId && quantity > 0) {
       try {
-        await updateUserEigenCredits(userId, quantity);
+        // Idempotency: dedupe on Paddle transaction id when available; otherwise fall back to a stable opId from payload.
+        const opId = makeOpId({ source: "paddle", userId, txnId: txnId ?? "unknown", quantity, eventType });
+        if (txnId) {
+          const first = await markPaddleTransactionProcessed(txnId, opId);
+          if (!first) {
+            log("info", "paddle.webhook_duplicate_ignored", { requestId, route, opId, userId, txnId });
+            return NextResponse.json({ success: true });
+          }
+        }
+        await applyCreditMutation({
+          userId,
+          delta: quantity,
+          source: "paddle",
+          opId,
+          metadata: { txnId: txnId ?? null, eventType, quantity },
+        });
       } catch (err) {
-        console.error("Paddle webhook updateUserEigenCredits error:", err);
+        log("error", "paddle.webhook_credit_failed", { requestId, route, userId, txnId, quantity }, err);
       }
     } else if (!userId) {
-      console.warn("Paddle webhook missing userId in customData; skipping EigenCredits update.");
+      log("warn", "paddle.webhook_missing_userId", { requestId, route, txnId });
     }
   }
 
@@ -117,7 +143,7 @@ function isValidSignature(rawBody: string, signature: { ts: number; h1: string }
     if (computed.length !== received.length) return false;
     return timingSafeEqual(computed, received);
   } catch (err) {
-    console.error("Paddle webhook signature verification failed:", err);
+    log("error", "paddle.webhook_sig_verify_failed", { requestId: "unknown", route: "/api/paddle/webhook" }, err);
     return false;
   }
 }

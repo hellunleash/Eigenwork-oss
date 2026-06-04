@@ -1,53 +1,272 @@
+import { createSign } from "crypto";
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+// Two supported modes:
+//   1. GitHub App installation token (preferred). Set:
+//        GITHUB_APP_CLIENT_ID         (preferred; "Iv23li..." or "Iv1.xxx")
+//        GITHUB_APP_INSTALLATION_ID   (numeric installation id)
+//        GITHUB_APP_PRIVATE_KEY       (PEM, \n-escaped or raw)
+//      For backward compatibility, GITHUB_APP_ID (the legacy numeric App ID)
+//      is still accepted as a fallback for the JWT `iss` claim. GitHub
+//      validates either, but Client ID is the going-forward identifier.
+//      Installation tokens grant 15,000+ REST requests/hour vs 5,000 for a PAT.
+//   2. Personal Access Token fallback (GITHUB_TOKEN). Existing deployments
+//      keep working unchanged.
+// We resolve auth lazily per request via getGithubAuthHeader, with an in-process
+// cache for the installation token (refreshed 5 min before expiry).
+// ---------------------------------------------------------------------------
+
+// GitHub allows either the new Client ID or the legacy numeric App ID as the
+// JWT `iss` claim. Prefer Client ID; fall back to App ID if only that is set.
+const GITHUB_APP_ISSUER =
+  process.env.GITHUB_APP_CLIENT_ID || process.env.GITHUB_APP_ID;
+const GITHUB_APP_INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID;
+// Accept the correctly-named env var first. If only the (historical) typo'd
+// name is set, fall through to it and warn once so the operator knows to
+// rename the env in their hosting provider. See bugs-fixed/security.txt
+// (2026-06-03) under "GitHub App env var tolerance".
+const GITHUB_APP_PRIVATE_KEY_RAW =
+  process.env.GITHUB_APP_PRIVATE_KEY ?? process.env.GITHUB_APP_PRVATE_KEY;
+if (
+  !process.env.GITHUB_APP_PRIVATE_KEY &&
+  process.env.GITHUB_APP_PRVATE_KEY
+) {
+  console.warn(
+    "[github-utils] GITHUB_APP_PRVATE_KEY env var is being used (typo). " +
+      "Rename to GITHUB_APP_PRIVATE_KEY in your hosting provider."
+  );
+}
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-async function githubFetch(url: string): Promise<Record<string, unknown> | null> {
-  const headers: HeadersInit = {
-    Accept: "application/vnd.github.v3+json",
-  };
-  if (GITHUB_TOKEN) {
-    (headers as Record<string, string>)["Authorization"] = `token ${GITHUB_TOKEN}`;
+// PEM keys in env are often escaped with literal \n; normalize.
+const GITHUB_APP_PRIVATE_KEY = GITHUB_APP_PRIVATE_KEY_RAW
+  ? GITHUB_APP_PRIVATE_KEY_RAW.replace(/\\n/g, "\n")
+  : undefined;
+
+function b64url(input: Buffer | string): string {
+  const buf = typeof input === "string" ? Buffer.from(input) : input;
+  return buf.toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function signAppJwt(issuer: string, privateKeyPem: string): string {
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  // GitHub recommends iat slightly in the past (clock skew) and exp ≤ 10 min.
+  // `iss` is the GitHub App's Client ID (preferred) or numeric App ID (legacy).
+  const now = Math.floor(Date.now() / 1000);
+  const payload = b64url(JSON.stringify({ iat: now - 60, exp: now + 9 * 60, iss: issuer }));
+  const data = `${header}.${payload}`;
+  const signer = createSign("RSA-SHA256");
+  signer.update(data);
+  const sig = signer.sign(privateKeyPem);
+  return `${data}.${b64url(sig)}`;
+}
+
+let cachedInstallationToken: { token: string; expiresAtMs: number } | null = null;
+let inflightTokenFetch: Promise<string> | null = null;
+
+async function fetchInstallationToken(): Promise<string> {
+  if (!GITHUB_APP_ISSUER || !GITHUB_APP_INSTALLATION_ID || !GITHUB_APP_PRIVATE_KEY) {
+    throw new Error("github_app_env_missing");
+  }
+  const jwt = signAppJwt(GITHUB_APP_ISSUER, GITHUB_APP_PRIVATE_KEY);
+  const res = await fetch(
+    `https://api.github.com/app/installations/${encodeURIComponent(GITHUB_APP_INSTALLATION_ID)}/access_tokens`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`github_app_installation_token_failed: ${res.status} ${body.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { token?: string; expires_at?: string };
+  if (!data.token || !data.expires_at) {
+    throw new Error("github_app_installation_token_malformed");
+  }
+  const expiresAtMs = new Date(data.expires_at).getTime();
+  cachedInstallationToken = { token: data.token, expiresAtMs };
+  return data.token;
+}
+
+async function getGithubAuthHeader(): Promise<string | null> {
+  if (GITHUB_APP_ISSUER && GITHUB_APP_INSTALLATION_ID && GITHUB_APP_PRIVATE_KEY) {
+    const now = Date.now();
+    if (cachedInstallationToken && cachedInstallationToken.expiresAtMs - now > 5 * 60 * 1000) {
+      return `Bearer ${cachedInstallationToken.token}`;
+    }
+    // Coalesce concurrent refreshes.
+    if (!inflightTokenFetch) {
+      inflightTokenFetch = fetchInstallationToken().finally(() => {
+        inflightTokenFetch = null;
+      });
+    }
+    try {
+      const tok = await inflightTokenFetch;
+      return `Bearer ${tok}`;
+    } catch (err) {
+      console.warn("[getRepoDNA] GitHub App token refresh failed; falling back:", err);
+      // Fall through to PAT if available.
+    }
+  }
+  return GITHUB_TOKEN ? `token ${GITHUB_TOKEN}` : null;
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency limiter + rate-limit-aware retry
+// ---------------------------------------------------------------------------
+// GitHub's primary REST limit is 5,000/hour (PAT) or 15,000/hour (App). The
+// more common failure mode at burst is the secondary rate limit, which trips
+// on concurrency from a single client even when the hourly budget is healthy.
+// A 3-slot semaphore keeps us well below that threshold while still allowing
+// useful parallelism across concurrent junior evaluations.
+// ---------------------------------------------------------------------------
+
+const MAX_CONCURRENT_GITHUB = 3;
+let activeGithubRequests = 0;
+const githubWaitQueue: Array<() => void> = [];
+
+function acquireGithubSlot(): Promise<void> {
+  if (activeGithubRequests < MAX_CONCURRENT_GITHUB) {
+    activeGithubRequests++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    githubWaitQueue.push(() => {
+      activeGithubRequests++;
+      resolve();
+    });
+  });
+}
+
+function releaseGithubSlot(): void {
+  activeGithubRequests--;
+  const next = githubWaitQueue.shift();
+  if (next) next();
+}
+
+// Cap on rate-limit backoff so a stuck request can't pin a worker forever.
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+/**
+ * If the response indicates a rate limit, sleep up to MAX_RATE_LIMIT_WAIT_MS
+ * and return true so the caller can retry once. Otherwise return false.
+ */
+async function maybeSleepForRateLimit(res: Response, url: string): Promise<boolean> {
+  if (res.status !== 403 && res.status !== 429) return false;
+
+  // Secondary rate limit / abuse detection sets Retry-After.
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const sec = parseInt(retryAfter, 10);
+    if (Number.isFinite(sec) && sec > 0) {
+      const waitMs = Math.min(MAX_RATE_LIMIT_WAIT_MS, sec * 1000);
+      console.warn(
+        `[getRepoDNA] GitHub secondary rate limit: sleeping ${waitMs}ms (${url.split("?")[0]})`
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+      return true;
+    }
   }
 
-  const res = await fetch(url, { headers, next: { revalidate: 3600 } });
-  if (!res.ok) {
-    if (res.status === 403) {
-      const body = await res.text();
-      const rateLimited = /rate limit|rate_limit/i.test(body);
-      console.warn("[getRepoDNA] GitHub API 403:", rateLimited ? "rate limit" : "forbidden", url.split("?")[0]);
-    } else {
-      console.warn("[getRepoDNA] GitHub API failed:", res.status, url.split("?")[0]);
+  // Primary rate limit: X-RateLimit-Remaining=0 + X-RateLimit-Reset epoch seconds.
+  const remaining = parseInt(res.headers.get("x-ratelimit-remaining") || "1", 10);
+  if (remaining === 0) {
+    const reset = parseInt(res.headers.get("x-ratelimit-reset") || "0", 10);
+    if (Number.isFinite(reset) && reset > 0) {
+      const waitMs = Math.min(MAX_RATE_LIMIT_WAIT_MS, Math.max(0, reset * 1000 - Date.now()));
+      if (waitMs > 0) {
+        console.warn(
+          `[getRepoDNA] GitHub primary rate limit: sleeping ${waitMs}ms (${url.split("?")[0]})`
+        );
+        await new Promise((r) => setTimeout(r, waitMs));
+        return true;
+      }
     }
-    return null;
   }
-  return res.json() as Promise<Record<string, unknown>>;
+  return false;
+}
+
+type FetchOpts = { useNextCache: boolean };
+
+async function rawGithubFetch(url: string, opts: FetchOpts): Promise<Response> {
+  const auth = await getGithubAuthHeader();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (auth) headers["Authorization"] = auth;
+
+  const init: RequestInit & { next?: { revalidate: number } } = { headers };
+  if (opts.useNextCache) {
+    init.next = { revalidate: 3600 };
+  } else {
+    init.cache = "no-store";
+  }
+  return fetch(url, init);
+}
+
+/**
+ * Single-retry rate-limit-aware GET that returns parsed JSON (or null).
+ * Concurrency-capped via acquireGithubSlot.
+ */
+async function githubGetJson(
+  url: string,
+  opts: FetchOpts,
+  label: string
+): Promise<Record<string, unknown> | null> {
+  await acquireGithubSlot();
+  try {
+    let res = await rawGithubFetch(url, opts);
+
+    if (!res.ok) {
+      const slept = await maybeSleepForRateLimit(res, url);
+      if (slept) {
+        res = await rawGithubFetch(url, opts);
+      }
+    }
+
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 429) {
+        const body = await res.text().catch(() => "");
+        const rateLimited = /rate limit|rate_limit|abuse|secondary/i.test(body);
+        console.warn(
+          `[getRepoDNA] GitHub API ${res.status}${rateLimited ? " (rate limit)" : ""} via ${label}: ${url.split("?")[0]}`
+        );
+      } else {
+        console.warn(`[getRepoDNA] GitHub API failed (${res.status}) via ${label}: ${url.split("?")[0]}`);
+      }
+      return null;
+    }
+
+    return (await res.json()) as Record<string, unknown>;
+  } catch (err) {
+    console.warn(`[getRepoDNA] GitHub fetch threw via ${label}:`, err);
+    return null;
+  } finally {
+    releaseGithubSlot();
+  }
+}
+
+async function githubFetch(url: string): Promise<Record<string, unknown> | null> {
+  return githubGetJson(url, { useNextCache: true }, "fetch");
 }
 
 /** Fetch GitHub data without using Next.js data cache (for large JSON responses like git trees). */
 async function githubFetchNoCache(url: string): Promise<Record<string, unknown> | null> {
-  const headers: HeadersInit = {
-    Accept: "application/vnd.github.v3+json",
-  };
-  if (GITHUB_TOKEN) {
-    (headers as Record<string, string>)["Authorization"] = `token ${GITHUB_TOKEN}`;
-  }
-
-  const res = await fetch(url, { headers, cache: "no-store" });
-  if (!res.ok) {
-    console.warn("[getRepoDNA] GitHub API (no-cache) failed:", res.status, url.split("?")[0]);
-    return null;
-  }
-  return res.json() as Promise<Record<string, unknown>>;
+  return githubGetJson(url, { useNextCache: false }, "fetchNoCache");
 }
 
 /** Fetch GitHub blob URL without Next.js cache (blobs can be >2MB; Next cache limit is 2MB). */
 async function githubFetchBlob(url: string): Promise<Record<string, unknown> | null> {
-  const headers: HeadersInit = { Accept: "application/vnd.github.v3+json" };
-  if (GITHUB_TOKEN) {
-    (headers as Record<string, string>)["Authorization"] = `token ${GITHUB_TOKEN}`;
-  }
-  const res = await fetch(url, { headers, cache: "no-store" });
-  if (!res.ok) return null;
-  return res.json() as Promise<Record<string, unknown>>;
+  return githubGetJson(url, { useNextCache: false }, "fetchBlob");
 }
 
 function parseGithubUrl(url: string): { owner: string; repo: string } | null {

@@ -1,76 +1,59 @@
-import { NextRequest, NextResponse } from "next/server";
-import { runJsonModel } from "@/lib/openai-client";
-
-import { getRepoDNA } from "@/lib/github-utils";
+import { NextRequest, NextResponse, after } from "next/server";
+import { randomUUID } from "crypto";
 import { getAdminDb, FieldValue, adminStorageUpload } from "@/lib/firebase-admin";
-import { getUserProfile, updateUserEigenCredits } from "@/lib/user-credits";
-
-import {
-  buildETIPrompt,
-  truncateInput,
-  cleanAndParseJSON
-} from "@/lib/eti/rubric-compress";
-
-import { extractResumeText } from "@/lib/docai-extract";
+import { allowRequest } from "@/lib/rate-limit";
+import { getRequestId, log, timeMs } from "@/lib/server-logger";
+import { getUserProfile } from "@/lib/user-credits";
 
 
-export const maxDuration = 300; // ⬅️ IMPORTANT: allows huge output
+// Junior path can spend 35-60s in Doc AI + GitHub + 2 LLM calls. 60s left no
+// headroom for cold starts or GitHub backoff; 120s gives a comfortable margin
+// while still failing fast on stuck requests.
+export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 
+// Per-jobId submission ceiling. 100/minute is ~10x the busiest realistic human
+// burst (HN frontpage, YC share-out) and ~10x the per-IP limit, so legitimate
+// candidates never see this — it only catches distributed bot floods against
+// one intake link. The credit balance is still the real spend ceiling.
+const PER_JOB_SUBMISSION_LIMIT = 100;
+const PER_JOB_SUBMISSION_WINDOW_SECONDS = 60;
 
-// ------------------------------------------------------
-// SAFE MODEL CALL (retries + streaming safe)
-// ------------------------------------------------------
-async function safeGenerate(prompt: string) {
-  let attempts = 0;
-
-  while (attempts < 2) {
-    try {
-      const text = await runJsonModel(prompt, 10000);
-      return text;
-    } catch (err) {
-      attempts++;
-      console.log("⚠️ GPT-5.2 error attempt:", attempts, err);
-
-      if (attempts >= 2) throw err;
-      await new Promise((r) => setTimeout(r, 1200 * attempts));
-    }
-  }
-}
-
-
-// Raw ETI is 0–85 (junior: ESQ+PDQ+NR; senior: OM+OD+PC). Normalize to 0–100 for display.
-// Candidates with normalized score < 50 are shown on dashboard but not considered for matching.
-const MAX_RAW_SCORE = 85;
-function normalizeScore(raw: number): number {
-  return Math.min(100, Math.round((raw / MAX_RAW_SCORE) * 100));
-}
-
-// Validate AI-returned yoe: must be a finite number 0–99.9.
-function safeYoe(value: unknown): number | undefined {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n < 0 || n > 99.9) return undefined;
-  return Math.round(n * 10) / 10;
-}
-
-// ------------------------------------------------------
-// JSON CLEANER
-// ------------------------------------------------------
-function extractJSON(text: string) {
-  try {
-    return cleanAndParseJSON(text);
-  } catch (e) {
-    console.error("❌ JSON extract failed:", text);
-    return {};
-  }
-}
-
+// Resume upload caps. Base64 inflates the binary by ~33%, so 7M chars ≈ 5.25MB
+// PDF. Real-world resumes are <500KB; 5MB is generous headroom for portfolios.
+// Defends against (a) accidental huge uploads driving Doc AI cost spikes and
+// (b) malicious uploads of non-PDF binaries.
+const MAX_RESUME_BASE64_CHARS = 7 * 1024 * 1024;
+const PDF_MAGIC = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]); // "%PDF-"
+// Conforming PDFs end with "%%EOF" in the trailer. We scan the last 1 KB so
+// trailing whitespace / line terminators don't trip the check. This catches
+// truncated PDFs and "garbage with a forged %PDF- header" attacks.
+const PDF_EOF = Buffer.from([0x25, 0x25, 0x45, 0x4f, 0x46]); // "%%EOF"
+const PDF_EOF_SCAN_BYTES = 1024;
+// Header must read "%PDF-1.x" or "%PDF-2.x" (Adobe's published versions).
+// Anything else is a non-conforming binary even if it passed the magic check.
+const PDF_HEADER_VERSION_RE = /^%PDF-[12]\.\d/;
 
 // ------------------------------------------------------
 // MAIN ROUTE
 // ------------------------------------------------------
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/candidate/evaluate";
+  const tTotal = timeMs();
+
   try {
+    // Public endpoint: rate limit to protect Document AI / LLM spend.
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip")?.trim() ||
+      "unknown";
+    const rl = await allowRequest({ key: `candidate_evaluate:${ip}`, limit: 10, windowSeconds: 60 });
+    if (!rl.allowed) {
+      log("warn", "rate_limit.blocked", { requestId, route, ip, resetAtMs: rl.resetAtMs });
+      return NextResponse.json({ error: "rate_limited" }, { status: 429 });
+    }
+
     const body = await req.json();
     const {
       name,
@@ -88,165 +71,213 @@ export async function POST(req: NextRequest) {
     } = body;
 
     const cleanBase64 = resumeBase64 ? String(resumeBase64).replace(/^data:(.*?);base64,/, "") : null;
-
-    const serverDate = new Date().toISOString().slice(0, 10);
-
-    // ------------------------------------------------------
-    // Load job owner for credit deduction later (intake page already pauses when credits = 0)
-    // ------------------------------------------------------
-    let userId: string | null = null;
-    if (jobId && typeof jobId === "string") {
-      const db = getAdminDb();
-      const jobSnap = await db.collection("jds").doc(jobId).get();
-      const jobData = jobSnap.data();
-      userId = typeof jobData?.userId === "string" ? jobData.userId : null;
+    if (!cleanBase64) {
+      return NextResponse.json({ error: "resume_required" }, { status: 400 });
     }
 
-    // ------------------------------------------------------
-    // RESUME → TEXT
-    // ------------------------------------------------------
-    let extractedText = "";
-
-    if (cleanBase64) {
-      extractedText = await extractResumeText(cleanBase64);
-      console.log("📄 Resume extracted:", extractedText.substring(0, 300));
+    // Size cap (string length, no decode required yet).
+    if (cleanBase64.length > MAX_RESUME_BASE64_CHARS) {
+      log("warn", "resume.too_large", {
+        requestId,
+        route,
+        base64Chars: cleanBase64.length,
+      });
+      return NextResponse.json(
+        {
+          error: "resume_too_large",
+          message: "Resume must be a PDF under 5 MB.",
+        },
+        { status: 413 }
+      );
     }
 
-    const resumeContext = truncateInput(
-      `RESUME CONTENT:\n${extractedText || "No text extracted"}`,
-      20000
-    );
+    // Magic-bytes check on decoded buffer. Defends against a non-PDF uploaded
+    // as ".pdf" that would either crash Document AI or burn quota processing
+    // garbage. We decode once here and reuse the buffer below.
+    let resumeBytes: Buffer;
+    try {
+      resumeBytes = Buffer.from(cleanBase64, "base64");
+    } catch {
+      return NextResponse.json(
+        { error: "resume_invalid", message: "Resume could not be decoded." },
+        { status: 400 }
+      );
+    }
+    if (
+      resumeBytes.length < PDF_MAGIC.length ||
+      !resumeBytes.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)
+    ) {
+      log("warn", "resume.not_pdf", {
+        requestId,
+        route,
+        bytes: resumeBytes.length,
+      });
+      return NextResponse.json(
+        {
+          error: "resume_not_pdf",
+          message: "Resume must be a PDF file.",
+        },
+        { status: 415 }
+      );
+    }
 
+    // PDF header version sanity. Reading the first 8 bytes as ASCII gives us
+    // "%PDF-1.7" or similar; we require a 1.x / 2.x version. Catches binaries
+    // that managed to start with the magic bytes but aren't real PDFs.
+    const headerBytes = resumeBytes.subarray(0, 8).toString("ascii");
+    if (!PDF_HEADER_VERSION_RE.test(headerBytes)) {
+      log("warn", "resume.bad_pdf_version", {
+        requestId,
+        route,
+        // strip non-printable so the log line is greppable
+        header: headerBytes.replace(/[^\x20-\x7e]/g, "?"),
+      });
+      return NextResponse.json(
+        {
+          error: "resume_not_pdf",
+          message: "Resume must be a PDF file.",
+        },
+        { status: 415 }
+      );
+    }
 
-    // ------------------------------------------------------
-    // Github DNA (junior only)
-    // ------------------------------------------------------
-    const isJunior = experience === "<2";
-    let githubContext = "No GitHub";
-
-    if (isJunior && githubUrl) {
-      try {
-        githubContext = (await getRepoDNA(githubUrl)) || "Repo inaccessible";
-      } catch {
-        githubContext = "Repo inaccessible";
+    // PDF trailer check. Every conforming PDF ends with "%%EOF" within the
+    // last ~1 KB. Catches:
+    //   - Truncated uploads (e.g. partial transfers from flaky clients)
+    //   - "Garbage padded with a fake %PDF- header" cost-bomb attempts
+    //   - Random binaries that happen to start with the magic bytes
+    // It does NOT defend against decompression bombs inside conforming PDF
+    // streams — that requires a real PDF parser (deferred; see
+    // bugs-fixed/validation.txt).
+    {
+      const scanStart = Math.max(0, resumeBytes.length - PDF_EOF_SCAN_BYTES);
+      const tail = resumeBytes.subarray(scanStart);
+      if (tail.indexOf(PDF_EOF) === -1) {
+        log("warn", "resume.no_pdf_trailer", {
+          requestId,
+          route,
+          bytes: resumeBytes.length,
+        });
+        return NextResponse.json(
+          {
+            error: "resume_malformed_pdf",
+            message: "Resume PDF appears to be incomplete or corrupted. Please re-upload.",
+          },
+          { status: 415 }
+        );
       }
     }
 
-
-    let finalResult: any = {};
-
     // ------------------------------------------------------
-    // JUNIOR MODE
+    // Per-jobId submission rate limit (bot-flood backstop, not human throttle).
+    // Skipped when jobId missing (legacy/non-JD submissions stay unchanged).
     // ------------------------------------------------------
-    if (isJunior) {
-
-      // --- BLOCK 1: ESQ ---
-      const promptESQ = buildETIPrompt({
-        context: githubContext,
-        mode: "junior-esq"
+    if (jobId && typeof jobId === "string") {
+      const jrl = await allowRequest({
+        key: `candidate_evaluate_job:${jobId}`,
+        limit: PER_JOB_SUBMISSION_LIMIT,
+        windowSeconds: PER_JOB_SUBMISSION_WINDOW_SECONDS,
       });
-
-      const rawESQ = String(await safeGenerate(promptESQ));
-      console.log("🟦 ESQ RAW OUTPUT:", rawESQ.substring(0, 300));
-      const jsonESQ = extractJSON(rawESQ);
-      const esq = jsonESQ ?? {};
-      const ESQ = (Number(esq.A1) || 0) + (Number(esq.A2) || 0) + (Number(esq.A3) || 0) + (Number(esq.A4) || 0);
-
-      // --- BLOCK 2+3: Behavioral ---
-      const promptBehav = buildETIPrompt({
-        context: resumeContext,
-        mode: "junior-behavioral",
-        currentDate: serverDate
-      });
-
-      const rawBehav = String(await safeGenerate(promptBehav));
-      console.log("🟩 BEHAVIOR RAW OUTPUT:", rawBehav.substring(0, 300));
-      const jsonBehav = extractJSON(rawBehav);
-
-      // Compute block totals from sub-scores so breakdown always adds up
-      const pdq = jsonBehav?.pdq_breakdown ?? {};
-      const nr = jsonBehav?.nr_breakdown ?? {};
-      const PDQ = (Number(pdq.B1) || 0) + (Number(pdq.B2) || 0) + (Number(pdq.B3) || 0);
-      const NR = (Number(nr.C1) || 0) + (Number(nr.C2) || 0);
-
-      // --- SCORING ---
-      let rawScore = ESQ + PDQ + NR;
-      console.log("overlord:", jsonBehav?.overlord);
-      if (jsonBehav.overlord === "inflated_cap_40") rawScore = Math.min(rawScore, 40);
-      if (jsonBehav.overlord === "suspicious_cap_46") rawScore = Math.min(rawScore, 46);
-      const score = normalizeScore(rawScore);
-      const yoe = safeYoe(jsonBehav?.yoe);
-
-      console.log("🟦 JUNIOR COMPUTED: ESQ=" + ESQ + " PDQ=" + PDQ + " NR=" + NR + " → raw=" + rawScore + " normalized=" + score + (yoe != null ? " yoe=" + yoe : ""));
-
-      finalResult = {
-        score,
-        ...(yoe != null && { yoe }),
-        breakdown: {
-          ESQ: { ...esq, ESQ },
-          PDQ: { ...pdq, PDQ },
-          NR: { ...nr, NR }
-        },
-        profile: jsonBehav.operating_profile,
-        is_matchable: score >= 50
-      };
+      if (!jrl.allowed) {
+        log("warn", "rate_limit.job_blocked", {
+          requestId,
+          route,
+          jobId,
+          ip,
+          resetAtMs: jrl.resetAtMs,
+        });
+        const retryAfterSec = Math.max(
+          1,
+          Math.ceil((jrl.resetAtMs - Date.now()) / 1000)
+        );
+        return NextResponse.json(
+          {
+            error: "rate_limited",
+            message:
+              "We're receiving a lot of applications right now. Please try again in a moment.",
+            retryAfter: retryAfterSec,
+          },
+          {
+            status: 429,
+            headers: { "Retry-After": String(retryAfterSec) },
+          }
+        );
+      }
     }
 
-
     // ------------------------------------------------------
-    // SENIOR MODE
+    // Load job: owner, isClosed gate, submissionCap gate
     // ------------------------------------------------------
-    else {
-
-      const promptSenior = buildETIPrompt({
-        context: resumeContext,
-        mode: "senior",
-        currentDate: serverDate
-      });
-
-      const raw = String(await safeGenerate(promptSenior));
-      console.log("🟥 SENIOR RAW OUTPUT:", raw.substring(0, 300));
-
-      const json = extractJSON(raw);
-
-      // Compute block totals from sub-scores so breakdown always adds up
-      const om = json?.om_breakdown ?? {};
-      const od = json?.od_breakdown ?? {};
-      const pc = json?.pc_breakdown ?? {};
-      const OM = (Number(om.A1) || 0) + (Number(om.A2) || 0) + (Number(om.A3) || 0);
-      const OD = (Number(od.B1) || 0) + (Number(od.B2) || 0) + (Number(od.B3) || 0);
-      const PC = (Number(pc.C1) || 0) + (Number(pc.C2) || 0) + (Number(pc.C3) || 0);
-
-      let rawScore = OM + OD + PC;
-      console.log("overlord:", json?.overlord);
-      if (json.overlord === "inflated_cap_40") rawScore = Math.min(rawScore, 40);
-      if (json.overlord === "suspicious_cap_46") rawScore = Math.min(rawScore, 46);
-      const score = normalizeScore(rawScore);
-      const yoe = safeYoe(json?.yoe);
-
-      console.log("🟥 SENIOR COMPUTED: OM=" + OM + " OD=" + OD + " PC=" + PC + " → raw=" + rawScore + " normalized=" + score + (yoe != null ? " yoe=" + yoe : ""));
-
-      const op = json.operating_profile || {};
-      finalResult = {
-        score,
-        ...(yoe != null && { yoe }),
-        breakdown: {
-          OM: { ...om, OM },
-          OD: { ...od, OD },
-          PC: { ...pc, PC }
-        },
-        profile: { ...op, ramp_expectation: op.ramp ?? op.ramp_expectation },
-        is_matchable: score >= 50
-      };
+    let userId: string | null = null;
+    let jobData: Record<string, unknown> | null = null;
+    if (jobId && typeof jobId === "string") {
+      const db = getAdminDb();
+      const jobSnap = await db.collection("jds").doc(jobId).get();
+      const rawJobData = jobSnap.data();
+      jobData = (rawJobData ?? null) as Record<string, unknown> | null;
+      userId = typeof jobData?.userId === "string" ? (jobData.userId as string) : null;
     }
 
+    // isClosed gate: founder explicitly closed the pipeline. Previously this
+    // field was decorative (set on the JD doc but never enforced) — see
+    // bugs-fixed/validation.txt (2026-06-03).
+    if (jobData && jobData.isClosed === true) {
+      log("info", "candidate.submission_blocked_closed", { requestId, route, jobId });
+      return NextResponse.json(
+        {
+          error: "job_closed",
+          message: "This job is no longer accepting applications.",
+        },
+        { status: 403 }
+      );
+    }
+
+    // submissionCap gate: count candidates already submitted OR processing.
+    // We count both so a burst of in-flight submissions can't all sneak in
+    // ahead of any one of them landing in "submitted". Same bugs-fixed entry.
+    if (jobData && jobId && typeof jobId === "string") {
+      const rawCap = typeof jobData.submissionCap === "number"
+        ? jobData.submissionCap
+        : parseInt(String(jobData.submissionCap ?? ""), 10);
+      const cap = Number.isInteger(rawCap) && rawCap >= 1 ? rawCap : null;
+      if (cap !== null) {
+        const db = getAdminDb();
+        const inFlightSnap = await db
+          .collection("candidates")
+          .where("matchData.jobId", "==", jobId)
+          .where("status", "in", ["submitted", "processing"])
+          .get();
+        if (inFlightSnap.size >= cap) {
+          log("info", "candidate.submission_blocked_cap", {
+            requestId,
+            route,
+            jobId,
+            cap,
+            count: inFlightSnap.size,
+          });
+          return NextResponse.json(
+            {
+              error: "submission_cap_reached",
+              message: "This job has reached its application limit.",
+            },
+            { status: 403 }
+          );
+        }
+      }
+    }
+
+    if (userId) {
+      const profile = await getUserProfile(userId);
+      if ((profile.eigenCredits ?? 0) <= 0) {
+        return NextResponse.json({ error: "no_credits" }, { status: 402 });
+      }
+    }
 
     // ------------------------------------------------------
-    // SAVE TO FIRESTORE (no resumeBase64; resumeUrl added after upload)
+    // Create candidate stub (processing) + upload resume + enqueue job
     // ------------------------------------------------------
     const db = getAdminDb();
     const docRef = await db.collection("candidates").add({
-      ...finalResult,
       candidateName: name ?? "",
       email: email ?? "",
       phone: phone || null,
@@ -260,43 +291,115 @@ export async function POST(req: NextRequest) {
         github: githubUrl || null,
         portfolio: projectLinks || []
       },
-      experienceLevel: isJunior ? "Junior" : "Senior",
+      experienceLevel: experience === "<2" ? "Junior" : "Senior",
       timestamp: FieldValue.serverTimestamp(),
-      status: "submitted"
+      status: "processing",
     });
 
-    let resumeUrl: string | null = null;
-    if (cleanBase64) {
-      try {
-        const bytes = Buffer.from(cleanBase64, "base64");
-        resumeUrl = await adminStorageUpload(`resumes/${docRef.id}.pdf`, bytes);
-        await db.collection("candidates").doc(docRef.id).update({ resumeUrl });
-      } catch (uploadErr) {
-        console.error("❌ Resume upload failed:", uploadErr);
-      }
-    }
+    const resumePath = `resumes/${docRef.id}.pdf`;
+    const tUp = timeMs();
+    // resumeBytes was decoded + magic-checked earlier; reuse to avoid a second
+    // base64 decode of a multi-MB string.
+    // The signed URL returned by adminStorageUpload is short-lived (1h) by
+    // design — we deliberately discard it. Any consumer needing a URL calls
+    // freshResumeUrl(path) at read time. See bugs-fixed/storage.txt (2026-06-03).
+    await adminStorageUpload(resumePath, resumeBytes);
+    log("info", "resume.upload_ok", { requestId, route, candidateId: docRef.id, latencyMs: tUp(), bytes: resumeBytes.byteLength });
 
-    if (userId) {
-      try {
-        const profile = await getUserProfile(userId);
-        if (profile.eigenCredits > 0) {
-          await updateUserEigenCredits(userId, -1);
+    // Per-candidate access token: lets the candidate view their own dashboard
+    // (status only) without Firebase auth, while keeping the /api/candidate/[id]
+    // endpoint closed to ID-guessing attackers. See bugs-fixed/security.txt.
+    const accessToken = randomUUID();
+
+    await db.collection("candidates").doc(docRef.id).set(
+      { resumePath, accessToken },
+      { merge: true }
+    );
+
+    const evalJobRef = await db.collection("evaluationJobs").add({
+      status: "queued",
+      attempts: 0,
+      candidateId: docRef.id,
+      jobId: jobId ?? null,
+      ownerUserId: userId,
+      resumePath,
+      githubUrl: githubUrl || null,
+      experience: experience ?? null,
+      createdAt: FieldValue.serverTimestamp(),
+      lastError: null,
+    });
+
+    log("info", "evaluation.enqueued", {
+      requestId,
+      route,
+      candidateId: docRef.id,
+      jobId: jobId ?? undefined,
+      userId: userId ?? undefined,
+      evaluationJobId: evalJobRef.id,
+      latencyMs: tTotal(),
+    });
+
+    // Fire-and-forget worker self-trigger. Runs AFTER the response is sent
+    // (via Next.js `after()`), so the candidate sees their submission redirect
+    // immediately and the worker processes asynchronously. If this fetch
+    // fails for any reason the Vercel Cron safety net (vercel.json) will
+    // claim the queued job within ~1 minute. See FAANG-Analysis.txt
+    // 2026-06-03 entry "Evaluation worker trigger".
+    const workerSecret = process.env.WORKER_SECRET ?? "";
+    const forwardedProto = req.headers.get("x-forwarded-proto") ?? "https";
+    const forwardedHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+    if (workerSecret && forwardedHost) {
+      const evaluationJobId = evalJobRef.id;
+      const workerUrl = `${forwardedProto}://${forwardedHost}/api/worker/evaluate`;
+      after(async () => {
+        try {
+          const res = await fetch(workerUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-worker-secret": workerSecret,
+            },
+            body: JSON.stringify({ jobId: evaluationJobId }),
+            cache: "no-store",
+          });
+          if (!res.ok) {
+            log("warn", "evaluation.self_trigger_non_ok", {
+              requestId,
+              route,
+              evaluationJobId,
+              status: res.status,
+            });
+          }
+        } catch (err) {
+          log(
+            "warn",
+            "evaluation.self_trigger_failed",
+            { requestId, route, evaluationJobId },
+            err
+          );
         }
-      } catch (creditsErr) {
-        console.error("❌ EigenCredits deduction failed:", creditsErr);
-      }
+      });
+    } else {
+      log("warn", "evaluation.self_trigger_skipped", {
+        requestId,
+        route,
+        evaluationJobId: evalJobRef.id,
+        reason: !workerSecret ? "missing_worker_secret" : "missing_host",
+      });
     }
 
     return NextResponse.json({
       success: true,
       id: docRef.id,
-      redirect: `/candidate/dashboard?id=${docRef.id}`,
-      ...finalResult,
+      accessToken,
+      redirect: `/candidate/dashboard?id=${docRef.id}&t=${accessToken}`,
+      status: "processing",
+      evaluationJobId: evalJobRef.id,
     });
 
   } catch (error) {
     const message = error instanceof Error ? error.message : "Processing Failed";
-    console.error("❌ EVALUATION ERROR:", error);
+    log("error", "candidate.evaluate_failed", { requestId, route, latencyMs: tTotal() }, error);
     return NextResponse.json(
       { error: "Processing Failed", message },
       { status: 500 }

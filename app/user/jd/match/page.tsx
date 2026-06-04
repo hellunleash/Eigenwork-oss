@@ -1,24 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { usePageTitle } from "@/lib/use-page-title";
 
 export default function MatchPage() {
   usePageTitle("Matching");
-  const [jd, setJD] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const saved = localStorage.getItem("finalJD");
-    if (saved) {
-      try {
-        setJD(JSON.parse(saved));
-      } catch (err) {
-        console.error("Failed to parse JD from localStorage:", err);
-      }
+  const [jd] = useState<Record<string, unknown> | null>(() => {
+    try {
+      const saved = localStorage.getItem("finalJD");
+      return saved ? (JSON.parse(saved) as Record<string, unknown>) : null;
+    } catch {
+      return null;
     }
-    setLoading(false);
-  }, []);
+  });
+  const loading = false;
 
   if (loading) {
     return (
@@ -79,7 +74,7 @@ export default function MatchPage() {
             lineHeight: "1.5",
           }}
         >
-          {jd ? `Finding matches for: ${jd.title || "your role"}` : "No job description found"}
+          {jd ? `Finding matches for: ${String(jd.title ?? "") || "your role"}` : "No job description found"}
         </p>
       </div>
     </div>

@@ -2,6 +2,7 @@ import useSWR from 'swr';
 import { useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
+import { getIdTokenOrNull } from '@/lib/auth-client';
 
 type Pipeline = {
   id: string;
@@ -17,20 +18,21 @@ type UserProfile = {
   eigenCredits: number;
 };
 
-type DashboardData = {
-  pipelines: Pipeline[];
-  eigenCredits: number;
-};
-
-// Fetcher function for SWR
-const fetcher = async (url: string): Promise<any> => {
-  const res = await fetch(url);
+async function authedFetch(url: string): Promise<unknown> {
+  const token = await getIdTokenOrNull();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   if (!res.ok) {
     const error = new Error('An error occurred while fetching the data.');
-    (error as any).status = res.status;
+    (error as unknown as { status?: number }).status = res.status;
     throw error;
   }
   return res.json();
+}
+
+const fetcher = async <T,>(url: string): Promise<T> => {
+  return (await authedFetch(url)) as T;
 };
 
 /**
@@ -54,7 +56,7 @@ export function useDashboardData(userId: string | null) {
     isValidating: pipelinesValidating,
     mutate: mutatePipelines,
   } = useSWR<{ pipelines: Pipeline[] } | Pipeline[]>(
-    userId ? `/api/jd/list?userId=${encodeURIComponent(userId)}` : null,
+    userId ? `/api/jd/list` : null,
     fetcher,
     {
       revalidateOnFocus: true,
@@ -76,7 +78,7 @@ export function useDashboardData(userId: string | null) {
     isValidating: userValidating,
     mutate: mutateUser,
   } = useSWR<UserProfile>(
-    userId ? `/api/user/me?userId=${encodeURIComponent(userId)}` : null,
+    userId ? `/api/user/me` : null,
     fetcher,
     {
       revalidateOnFocus: true,

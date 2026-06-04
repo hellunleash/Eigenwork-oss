@@ -30,9 +30,13 @@ export default function JDInputPage() {
     setLoading(true);
 
     try {
+      const token = await auth.currentUser?.getIdToken();
       const res = await fetch("/api/jd/parse", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({jd: text }),
       });
 
@@ -47,7 +51,7 @@ export default function JDInputPage() {
       } else {
         alert("Could not parse the Job Description. Try again.");
       }
-    } catch (err) {
+    } catch {
       alert("Error connecting to server.");
     }
 
@@ -115,7 +119,7 @@ export default function JDInputPage() {
               lineHeight: "1.5",
             }}
           >
-            Paste your Tech Role Description. We'll extract and structure the key information automatically.
+            Paste your Tech Role Description. We&apos;ll extract and structure the key information automatically.
           </p>
         </div>
 

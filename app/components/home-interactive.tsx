@@ -5,21 +5,6 @@ import { HomeLoginModal } from "./home-login-modal";
 
 export function HomeInteractive() {
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showEtiPopover, setShowEtiPopover] = useState(false);
-  const [showRampReason, setShowRampReason] = useState(false);
-  const [showSupervisionReason, setShowSupervisionReason] = useState(false);
-  const etiPopoverRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showEtiPopover) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (etiPopoverRef.current && !etiPopoverRef.current.contains(e.target as Node)) {
-        setShowEtiPopover(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showEtiPopover]);
 
   return (
     <>

@@ -73,8 +73,15 @@ export default function ProcessingPage() {
 
         setStatus("Finalizing EigenTrust Score...");
 
+        // Use the server-built redirect URL so the per-candidate access token
+        // (?t=...) is included. The dashboard needs the token to read its own
+        // status without exposing the doc to ID-guessing attackers.
+        const fallbackRedirect = `/candidate/dashboard?id=${encodeURIComponent(result.id)}${
+          result.accessToken ? `&t=${encodeURIComponent(result.accessToken)}` : ""
+        }`;
+        const redirectTo = typeof result.redirect === "string" ? result.redirect : fallbackRedirect;
         setTimeout(() => {
-          router.push(`/candidate/dashboard?id=${result.id}`);
+          router.push(redirectTo);
         }, 900);
 
       } catch (err) {

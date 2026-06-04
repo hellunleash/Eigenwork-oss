@@ -8,16 +8,21 @@ function CandidateDashboardContent() {
   usePageTitle("Your Results");
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let id = searchParams.get("id");
-    if (!id && typeof window !== "undefined") {
+    let token = searchParams.get("t");
+    if (typeof window !== "undefined") {
       try {
         const stored = localStorage.getItem("eti_result");
-        if (stored) id = JSON.parse(stored)?.id ?? null;
+        if (stored) {
+          const parsed = JSON.parse(stored) ?? {};
+          if (!id) id = parsed.id ?? null;
+          if (!token) token = parsed.accessToken ?? null;
+        }
       } catch { /* ignore */ }
     }
     if (!id) {
@@ -25,7 +30,8 @@ function CandidateDashboardContent() {
       return;
     }
     let cancelled = false;
-    fetch(`/api/candidate/${encodeURIComponent(id)}`)
+    const qs = token ? `?t=${encodeURIComponent(token)}` : "";
+    fetch(`/api/candidate/${encodeURIComponent(id)}${qs}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.status === 404 ? "Not found" : "Failed to load");
         return res.json();

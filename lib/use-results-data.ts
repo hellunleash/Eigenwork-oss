@@ -1,4 +1,9 @@
 import useSWR from 'swr';
+import { useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { buildEtiDistributionFromScores, type EtiDistribution } from '@/lib/eti-distribution';
+import { getIdTokenOrNull } from '@/lib/auth-client';
 
 type RoleFit = {
   one_liner?: string;
@@ -27,18 +32,23 @@ export type Candidate = {
 
 type MatchResultsResponse = {
   top10: Candidate[];
+  etiDistribution?: EtiDistribution;
+  seniority?: string;
   success?: boolean;
   error?: string;
 };
 
 // Fetcher function for SWR
 const fetcher = async (url: string): Promise<MatchResultsResponse> => {
-  const res = await fetch(url);
+  const token = await getIdTokenOrNull();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   if (!res.ok) {
     const error = new Error('An error occurred while fetching the data.');
-    (error as any).status = res.status;
+    (error as unknown as { status?: number }).status = res.status;
     const data = await res.json().catch(() => ({}));
-    (error as any).message = data.error ?? 'Failed to load results';
+    (error as unknown as { message: string }).message = (data as { error?: string }).error ?? 'Failed to load results';
     throw error;
   }
   return res.json();
@@ -76,8 +86,23 @@ export function useResultsData(jobId: string | null) {
     }
   );
 
+  // Invalidate this hook's cache on sign-out so a re-login (potentially as a
+  // different user) doesn't render a previous session's results before the
+  // server has had a chance to authorize. Matches the pattern in
+  // useDashboardData. See lib/swr-config.tsx for the global story.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        mutate(undefined, { revalidate: false });
+      }
+    });
+    return () => unsubscribe();
+  }, [mutate]);
+
   // Extract top10 candidates
   const top10: Candidate[] = data?.top10 ?? [];
+  const etiDistribution: EtiDistribution =
+    data?.etiDistribution ?? buildEtiDistributionFromScores([]);
 
   // Determine loading state (only true if we have no cached data)
   const isLoadingData = isLoading && top10.length === 0;
@@ -92,8 +117,12 @@ export function useResultsData(jobId: string | null) {
     await mutate();
   };
 
+  const seniority: string = data?.seniority ?? "";
+
   return {
     top10,
+    etiDistribution,
+    seniority,
     isLoading: isLoadingData,
     isValidating, // True when revalidating in background (has cached data)
     error: errorMessage,

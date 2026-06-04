@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// =============================================================================
+// EigenWork — Storage security rules
+// =============================================================================
+//
+// THREAT MODEL
+//   The previous rule set:
+//
+//     match /resumes/{fileName} {
+//       allow write: if true;                    // anyone, unauthenticated
+//       allow read: if request.auth != null;     // any Google-signed-in user
+//     }
+//     match /{allPaths=**} {
+//       allow read, write: if request.auth != null;
+//     }
+//
+//   meant:
+//     * Any UNAUTHENTICATED attacker could upload arbitrary content into
+//       /resumes/*, including overwriting legitimate candidates' PDFs with
+//       malicious payloads, or cost-bombing the bucket.
+//     * Any Google-authenticated user (free signup) could iterate resume
+//       filenames -- they're {candidateId}.pdf and the candidate IDs were
+//       fully exposed by the matching Firestore rule -- and download every
+//       resume PDF in the bucket. The owner check we added in
+//       /api/candidate/[id]/resume and the 1-hour signed-URL TTL were
+//       both bypassed entirely by the client-SDK direct path.
+//
+// ARCHITECTURE
+//   - Resume uploads: server side only. POST /api/candidate/evaluate decodes
+//     the base64 PDF and calls adminStorageUpload(), which uses the Admin
+//     SDK and bypasses these rules.
+//   - Resume downloads: short-lived signed URLs minted on authenticated,
+//     owner-checked API reads (/api/candidate/[id], /api/candidate/[id]/resume).
+//     Signed URLs work without rule permission -- they are pre-authorized
+//     at mint time by the Admin SDK.
+//   - No client file imports `storage` from lib/firebase.ts -- verified by
+//     grep on 2026-06-03.
+//
+//   Therefore the safest rule -- deny all client-SDK access -- breaks
+//   nothing while closing the entire client-side attack surface.
+//
+// CHANGING THIS FILE
+//   Do NOT loosen these rules without an explicit threat-model review.
+//   Specifically: do NOT add `allow write: if true` to any path. Server-side
+//   upload via Admin SDK is the supported pattern.
+//
+// DEPLOY
+//   firebase deploy --only storage:rules
+//   (or paste this entire file into Firebase Console -> Storage -> Rules
+//   and click Publish.)
+//
+// LAST REVIEWED
+//   2026-06-03 — see bugs-fixed/security.txt entry of the same date.
+// =============================================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

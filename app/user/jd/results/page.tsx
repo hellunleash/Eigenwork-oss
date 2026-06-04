@@ -1,15 +1,143 @@
 "use client";
 export const dynamic = 'force-dynamic';
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useState, useCallback } from "react";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useResultsData, type Candidate } from "@/lib/use-results-data";
+import { seniorityToCluster, detectWeakPool, type WeakPoolResult } from "@/lib/weak-pool";
+import { auth } from "@/lib/firebase";
+import {
+  ETI_AXIS_BAND_START,
+  etiBandFlexWeights,
+  etiBucketRangeLabel,
+  type EtiDistribution,
+} from "@/lib/eti-distribution";
 
 function getRoleFitOneLiner(c: Candidate): string {
   const rf = c.role_fit ?? c.profile?.role_fit;
   if (typeof rf === "string") return rf.trim() || "Not provided";
   if (rf && typeof rf === "object" && "one_liner" in rf) return (rf.one_liner ?? "").trim() || "Not provided";
   return "Not provided";
+}
+
+function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistribution }) {
+  const { buckets, total } = distribution;
+  if (total === 0) return null;
+
+  const flexWeights = etiBandFlexWeights(distribution);
+  const flexSum = flexWeights.reduce((a, w) => a + w, 0);
+  const colWidthPct = flexWeights.map((w) => (w / flexSum) * 100);
+
+  const segmentBoundaryPct = flexWeights.reduce<number[]>((acc, w) => {
+    const prev = acc.length ? acc[acc.length - 1] : 0;
+    acc.push(prev + (w / flexSum) * 100);
+    return acc;
+  }, []);
+
+  const ariaBands = buckets
+    .map((b, i) => `${b.count} ${etiBucketRangeLabel(i)}`)
+    .join(", ");
+
+  const BAND_COLORS = ["#ef4444", "#eab308", "#22c55e", "#0d9488"];
+
+  const midpoints = [
+    segmentBoundaryPct[0] * 0.5,
+    (segmentBoundaryPct[0] + segmentBoundaryPct[1]) * 0.5,
+    (segmentBoundaryPct[1] + segmentBoundaryPct[2]) * 0.5,
+    (segmentBoundaryPct[2] + 100) * 0.5,
+  ];
+
+  const continuousGradient =
+    `linear-gradient(to right, ` +
+    `${BAND_COLORS[0]} ${midpoints[0]}%, ` +
+    `${BAND_COLORS[1]} ${midpoints[1]}%, ` +
+    `${BAND_COLORS[2]} ${midpoints[2]}%, ` +
+    `${BAND_COLORS[3]} ${midpoints[3]}%)`;
+
+  return (
+    <div className="mb-6 w-full">
+      <div
+        className="relative h-8 w-full min-h-[2rem] rounded-xl overflow-hidden ring-1 ring-inset ring-gray-200/90 shadow-inner bg-gray-100/90"
+        role="img"
+        aria-label={`ETI pool for this job (${total} applicants). Four bands; column width grows with count but empty bands stay visible. Fill height is share of pool in each band: ${ariaBands}`}
+      >
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{ backgroundImage: continuousGradient, opacity: 0.22 }}
+          aria-hidden
+        />
+        <div className="relative flex h-full w-full divide-x divide-white/30">
+          {buckets.map((b, i) => {
+            const sharePct = total > 0 ? (b.count / total) * 100 : 0;
+            const leftPx = i === 0 ? 0 : segmentBoundaryPct[i - 1];
+            const widthPx = colWidthPct[i];
+            return (
+              <div
+                key={i}
+                className="relative h-full min-w-0 overflow-hidden"
+                style={{ flex: `${flexWeights[i]} 1 0%` }}
+              >
+                {b.count === 0 && (
+                  <div
+                    className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(-45deg,rgba(0,0,0,0.04)_0px,rgba(0,0,0,0.04)_5px,transparent_5px,transparent_10px)]"
+                    aria-hidden
+                  />
+                )}
+                <div
+                  className="absolute bottom-0 left-0 right-0 overflow-hidden"
+                  style={{
+                    height: sharePct > 0 ? `${sharePct}%` : "0%",
+                    minHeight: b.count > 0 ? 4 : 0,
+                  }}
+                >
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${(100 / widthPx) * 100}%`,
+                      marginLeft: `${-leftPx * (100 / widthPx)}%`,
+                      backgroundImage: continuousGradient,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex w-full mt-1.5 text-[10px] leading-tight tabular-nums">
+        {buckets.map((b, i) => {
+          const pctRounded = total > 0 ? Math.round((b.count / total) * 100) : 0;
+          const wPct = Math.round(colWidthPct[i] * 10) / 10;
+          return (
+            <div
+              key={`label-${i}`}
+              className="min-w-0 overflow-hidden px-0.5 text-center"
+              style={{ flex: `${flexWeights[i]} 1 0%` }}
+              title={`${etiBucketRangeLabel(i)}: ${b.count} applicant${b.count !== 1 ? "s" : ""} (${pctRounded}% of pool); ~${wPct}% of bar width`}
+            >
+              <div className="truncate font-medium text-gray-700">{etiBucketRangeLabel(i)}</div>
+              <div className={b.count === 0 ? "truncate text-gray-300" : "truncate text-gray-500"}>
+                {b.count} ({pctRounded}%)
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="relative mt-1 h-4 w-full text-[10px] text-gray-400 tabular-nums select-none">
+        <span className="absolute left-0 top-0">{ETI_AXIS_BAND_START[0]}</span>
+        {[1, 2, 3].map((i) => (
+          <span
+            key={`tick-${i}`}
+            className="absolute top-0 -translate-x-1/2"
+            style={{ left: `${segmentBoundaryPct[i - 1]}%` }}
+          >
+            {ETI_AXIS_BAND_START[i]}
+          </span>
+        ))}
+        <span className="absolute right-0 top-0">100</span>
+      </div>
+    </div>
+  );
 }
 
 function getTrustLabel(score: number): { text: string; className: string } {
@@ -40,13 +168,132 @@ function ResultsNavBar() {
   );
 }
 
+function WeakPoolBanner({
+  weakPool,
+  onStartNewIntake,
+  onDismiss,
+}: {
+  weakPool: WeakPoolResult & { weak: true };
+  onStartNewIntake: () => void;
+  onDismiss: () => void;
+}) {
+  const isJunior = weakPool.cluster === "junior";
+  const body = isJunior
+    ? `${weakPool.pctBelowThreshold}% of applicants did not meet the baseline ETI (50). This usually indicates low-quality sourcing.`
+    : `${weakPool.pctBelowThreshold}% of applicants are below the contributor threshold (ETI 65). The pool lacks strong-fit candidates.`;
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 relative">
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="absolute top-3 right-3 text-amber-400 hover:text-amber-600 transition-colors"
+        aria-label="Dismiss"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+      <h3 className="text-sm font-semibold text-amber-900 mb-1">Weak Candidate Pool</h3>
+      <p className="text-sm text-amber-800 mb-4 pr-6">{body}</p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onStartNewIntake}
+          className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+        >
+          Start New Intake
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          Keep This Pool
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewIntakeModal({
+  onCancel,
+  onConfirm,
+  isSubmitting,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+  isSubmitting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">Start New Intake</h3>
+        <p className="text-sm text-gray-600 mb-2">
+          You can start collecting a new set of applicants.
+        </p>
+        <p className="text-xs text-gray-400 mb-6">
+          No additional cost. Credits used for this pool will be restored.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isSubmitting}
+            className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isSubmitting}
+            className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50"
+          >
+            {isSubmitting ? "Starting…" : "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JDResultsContent() {
   usePageTitle("Top Candidates");
+  const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
   
-  // Use SWR-based results data hook
-  const { top10, isLoading, error, revalidate } = useResultsData(jobId);
+  const { top10, etiDistribution, seniority, isLoading, error, revalidate } = useResultsData(jobId);
+
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const weakPool = detectWeakPool(etiDistribution, seniorityToCluster(seniority));
+
+  const handleConfirmNewIntake = useCallback(async () => {
+    if (!jobId || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/jd/new-intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ jobId }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      setShowModal(false);
+      setBannerDismissed(true);
+      router.push("/user/dashboard");
+    } catch {
+      setIsSubmitting(false);
+    }
+  }, [jobId, isSubmitting, router]);
 
   if (!jobId) {
     return (
@@ -88,12 +335,12 @@ function JDResultsContent() {
     );
   }
 
-  if (top10.length === 0) {
+  if (top10.length === 0 && etiDistribution.total === 0) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
         <ResultsNavBar />
         <div className="flex-1 flex flex-col items-center justify-center p-4">
-          <p className="text-gray-600 text-sm text-center">No matching candidates passed the filters.</p>
+          <p className="text-gray-600 text-sm text-center">No applicants in the pool for this job yet.</p>
         </div>
       </div>
     );
@@ -104,6 +351,26 @@ function JDResultsContent() {
       <ResultsNavBar />
       <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-8 sm:px-6">
         <h1 className="text-xl font-semibold text-gray-900 mb-6">Pipeline Results</h1>
+        <EtiPoolDistributionBar distribution={etiDistribution} />
+        {weakPool.weak && !bannerDismissed && (
+          <WeakPoolBanner
+            weakPool={weakPool}
+            onStartNewIntake={() => setShowModal(true)}
+            onDismiss={() => setBannerDismissed(true)}
+          />
+        )}
+        {showModal && (
+          <NewIntakeModal
+            onCancel={() => setShowModal(false)}
+            onConfirm={handleConfirmNewIntake}
+            isSubmitting={isSubmitting}
+          />
+        )}
+        {top10.length === 0 ? (
+          <p className="text-gray-600 text-sm text-center py-4">
+            No matching candidates passed the filters (role fit, ETI ≥ 50, and work authorization).
+          </p>
+        ) : (
         <ul className="space-y-4">
           {top10.map((c) => {
             const trust = getTrustLabel(c.score);
@@ -150,22 +417,45 @@ function JDResultsContent() {
                     >
                       View Candidate Card
                     </a>
-                    {c.resume_url && (
-                      <a
-                        href={c.resume_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        Download Resume ⬇
-                      </a>
-                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        // Always mint a fresh signed URL at click time, so the
+                        // button works even if the page has been open for >1h
+                        // since the embedded URL was minted. See bugs-fixed/
+                        // storage.txt (2026-06-03).
+                        try {
+                          const token = await auth.currentUser?.getIdToken();
+                          const res = await fetch(`/api/candidate/${encodeURIComponent(c.id)}/resume`, {
+                            headers: token ? { Authorization: `Bearer ${token}` } : {},
+                          });
+                          if (!res.ok) {
+                            if (c.resume_url) {
+                              window.open(c.resume_url, "_blank", "noopener,noreferrer");
+                              return;
+                            }
+                            throw new Error("resume_unavailable");
+                          }
+                          const { url } = (await res.json()) as { url?: string };
+                          if (!url) throw new Error("resume_unavailable");
+                          window.open(url, "_blank", "noopener,noreferrer");
+                        } catch {
+                          // Silent fallback: nothing better to do at this layer
+                          // than fail the click — the page-load URL is the
+                          // last-resort fallback above.
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Download Resume ⬇
+                    </button>
                   </div>
                 </div>
               </li>
             );
           })}
         </ul>
+        )}
       </div>
     </div>
   );

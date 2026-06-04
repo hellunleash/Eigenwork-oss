@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
+import { requireFirebaseUser } from "@/lib/auth-server";
+import { getRequestId, log } from "@/lib/server-logger";
 
 /**
  * Saves the confirmed JD (from confirm page) to Firestore so /api/jd/match
@@ -7,7 +9,12 @@ import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
  * If body.jobId is provided, updates the existing job document instead of creating one.
  */
 export async function POST(req: Request) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/jd/save";
   try {
+    const auth = await requireFirebaseUser(req.headers);
+    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
     const body = await req.json();
 
     const {
@@ -24,7 +31,6 @@ export async function POST(req: Request) {
       work_auth_provided,
       submissionCap,
       role_fit,
-      userId,
     } = body;
 
     const rawCap = typeof submissionCap === "number" ? submissionCap : parseInt(String(submissionCap), 10);
@@ -56,12 +62,18 @@ export async function POST(req: Request) {
       },
       submissionCap: cap,
       ...(roleFitDoc ? { role_fit: roleFitDoc } : {}),
-      userId: typeof userId === "string" ? userId : null,
+      userId: auth.userId,
     };
 
     const db = getAdminDb();
 
     if (existingJobId && typeof existingJobId === "string") {
+      // Authorization: only owner can update
+      const existing = await db.collection("jds").doc(existingJobId).get();
+      const existingUserId = existing.data()?.userId;
+      if (existingUserId && existingUserId !== auth.userId) {
+        return NextResponse.json({ error: "forbidden" }, { status: 403 });
+      }
       await db.collection("jds").doc(existingJobId).update(payload);
       return NextResponse.json({ success: true, jobId: existingJobId });
     }
@@ -73,9 +85,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true, jobId: docRef.id });
   } catch (err) {
-    console.error("JD save error:", err);
+    log("error", "jd.save_failed", { requestId, route }, err);
     return NextResponse.json(
-      { error: "Failed to save JD", details: String(err) },
+      { error: "Failed to save JD" },
       { status: 500 }
     );
   }

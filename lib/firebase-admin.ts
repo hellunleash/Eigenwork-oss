@@ -4,6 +4,7 @@
  * Do NOT import in client components — use lib/firebase.ts for browser.
  */
 import { getApps, initializeApp, getApp, cert, applicationDefault, App, ServiceAccount } from "firebase-admin/app";
+import { getAuth, Auth } from "firebase-admin/auth";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import { getStorage, Storage } from "firebase-admin/storage";
 
@@ -51,6 +52,16 @@ export function getAdminDb(): Firestore {
   return _adminDb;
 }
 
+let _adminAuth: Auth | null = null;
+
+/** Admin Auth instance — use to verify Firebase ID tokens server-side. */
+export function getAdminAuth(): Auth {
+  if (!_adminAuth) {
+    _adminAuth = getAuth(getAdminApp());
+  }
+  return _adminAuth;
+}
+
 /** Get admin Firestore. Lazy-initialized; call getAdminDb() in API routes. */
 
 let _adminStorage: Storage | null = null;
@@ -66,18 +77,53 @@ export function getAdminStorage(): Storage {
 /** FieldValue for serverTimestamp, increment, etc. */
 export { FieldValue } from "firebase-admin/firestore";
 
-const DEFAULT_EXPIRY_MS = 10 * 365 * 24 * 60 * 60 * 1000; // 10 years
+// Resume PDF signed URLs are short-lived (1 hour). Anything that needs a URL
+// must call freshResumeUrl(path) at read time. Never persist these URLs in
+// Firestore documents — the path is what gets stored; the URL is generated
+// fresh per authorized response.
+//
+// Historical context: this constant used to be 10 years, which made any
+// leaked URL effectively permanent and made GDPR "right to deletion" requests
+// impossible to honor. See bugs-fixed/storage.txt (2026-06-03).
+const SIGNED_URL_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Upload buffer to Storage path; returns signed download URL. */
+/** Upload buffer to Storage path; returns a short-lived signed URL (1h).
+ *  Callers should store only the `path`, not this URL. */
 export async function adminStorageUpload(path: string, buffer: Buffer, contentType = "application/pdf"): Promise<string> {
   const bucket = getAdminStorage().bucket();
   const file = bucket.file(path);
   await file.save(buffer, { contentType, metadata: { contentType } });
   const [url] = await file.getSignedUrl({
     action: "read",
-    expires: Date.now() + DEFAULT_EXPIRY_MS,
+    expires: Date.now() + SIGNED_URL_TTL_MS,
   });
   return url;
+}
+
+/** Generate a fresh 1-hour signed read URL for a stored Storage path.
+ *  Returns null if path is empty/missing or generation fails. Safe to call
+ *  during response building; never throws. */
+export async function freshResumeUrl(path: string | null | undefined): Promise<string | null> {
+  if (!path || typeof path !== "string") return null;
+  try {
+    const bucket = getAdminStorage().bucket();
+    const file = bucket.file(path);
+    const [url] = await file.getSignedUrl({
+      action: "read",
+      expires: Date.now() + SIGNED_URL_TTL_MS,
+    });
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** Download file bytes from Storage path. */
+export async function adminStorageDownload(path: string): Promise<Buffer> {
+  const bucket = getAdminStorage().bucket();
+  const file = bucket.file(path);
+  const [buf] = await file.download();
+  return buf;
 }
 
 /** Delete file from Storage. */

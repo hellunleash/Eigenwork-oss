@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireFirebaseUser } from "@/lib/auth-server";
+import { getRequestId, log } from "@/lib/server-logger";
 
 /**
  * Returns the user's pipelines with submissionCap, isClosed, appliedCount.
  * appliedCount = candidates where matchData.jobId == jobId and status === "submitted".
- * Requires ?userId=<firebase_uid> so each user only sees their own pipelines.
  */
 export async function GET(req: NextRequest) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/jd/list";
   try {
-    const userId = req.nextUrl.searchParams.get("userId");
-    if (!userId || typeof userId !== "string" || !userId.trim()) {
-      return NextResponse.json({ error: "Missing userId", pipelines: [] }, { status: 400 });
-    }
-    const uid = userId.trim();
+    const auth = await requireFirebaseUser(req.headers);
+    if (!auth.ok) return NextResponse.json({ error: auth.error, pipelines: [] }, { status: auth.status });
+    const uid = auth.userId;
     const db = getAdminDb();
 
     const jdsSnap = await db.collection("jds").where("userId", "==", uid).get();
@@ -48,9 +49,9 @@ export async function GET(req: NextRequest) {
     pipelines.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
     return NextResponse.json({ pipelines });
   } catch (err) {
-    console.error("JD list error:", err);
+    log("error", "jd.list_failed", { requestId, route }, err);
     return NextResponse.json(
-      { error: "Failed to load pipelines", details: String(err) },
+      { error: "Failed to load pipelines" },
       { status: 500 }
     );
   }

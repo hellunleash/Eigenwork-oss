@@ -1,10 +1,30 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, adminStorageDelete } from "@/lib/firebase-admin";
 import { getUserProfile } from "@/lib/user-credits";
+import { requireFirebaseUser } from "@/lib/auth-server";
+import { getRequestId, log } from "@/lib/server-logger";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
 
-/** GET /api/jd/[jobId] — returns the job document for candidate intake autofill. Includes appliedCount, isClosed, and eigenCredits for link expiry/pause. */
+/**
+ * GET /api/jd/[jobId] — PUBLIC.
+ *
+ * Used by the candidate intake page to autofill the job title/stack/location
+ * fields and to gate submission when isClosed or eigenCredits is 0.
+ *
+ * IMPORTANT: this endpoint is reachable by anyone who has the intake link
+ * (which is shared publicly on X/LinkedIn/email blasts). Responses MUST be
+ * a strict whitelist of fields safe to show on a public intake form. In
+ * particular this MUST NOT return:
+ *   - userId (owner identity)
+ *   - matchResult / matchResult.top10 (the employer's ranked candidate
+ *     shortlist, including names, emails, phones, resume URLs)
+ *   - any other internal field added to the JD doc in the future
+ *
+ * Historical: prior to this hardening (see bugs-fixed/data-exposure.txt,
+ * 2026-06-03) this route used a blacklist that filtered out only `userId`,
+ * which leaked matchResult to anyone with the intake link.
+ */
 export async function GET(_req: Request, context: RouteContext) {
   try {
     const { jobId } = await context.params;
@@ -16,9 +36,10 @@ export async function GET(_req: Request, context: RouteContext) {
     if (!snap.exists) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-    const data = snap.data();
-    const isClosed = Boolean(data?.isClosed);
-    const submissionCap = typeof data?.submissionCap === "number" ? data.submissionCap : 10;
+    const data = (snap.data() ?? {}) as Record<string, unknown>;
+
+    const isClosed = Boolean(data.isClosed);
+    const submissionCap = typeof data.submissionCap === "number" ? data.submissionCap : 10;
 
     const candSnap = await db
       .collection("candidates")
@@ -28,41 +49,66 @@ export async function GET(_req: Request, context: RouteContext) {
     const appliedCount = candSnap.size;
 
     let eigenCredits = 0;
-    const userId = typeof data?.userId === "string" ? data.userId : null;
-    if (userId) {
+    const ownerUserId = typeof data.userId === "string" ? data.userId : null;
+    if (ownerUserId) {
       try {
-        const profile = await getUserProfile(userId);
+        const profile = await getUserProfile(ownerUserId);
         eigenCredits = profile.eigenCredits;
       } catch {
         eigenCredits = 0;
       }
     }
 
-    return NextResponse.json({
-      ...data,
+    // EXPLICIT WHITELIST. Add a new field here only after confirming it's safe
+    // to expose to an unauthenticated intake-page viewer.
+    const publicView = {
       id: snap.id,
+      title: typeof data.title === "string" ? data.title : "",
+      seniority: typeof data.seniority === "string" ? data.seniority : "",
+      role_category: typeof data.role_category === "string" ? data.role_category : "",
+      tech_stack: Array.isArray(data.tech_stack) ? data.tech_stack : [],
+      location_type: typeof data.location_type === "string" ? data.location_type : "",
+      yoe_required: typeof data.yoe_required === "string" ? data.yoe_required : "",
+      employment_type: typeof data.employment_type === "string" ? data.employment_type : "",
+      work_auth_requirement:
+        data.work_auth_requirement && typeof data.work_auth_requirement === "object"
+          ? data.work_auth_requirement
+          : null,
+      role_fit:
+        data.role_fit && typeof data.role_fit === "object"
+          ? data.role_fit
+          : null,
       isClosed,
       submissionCap,
       appliedCount,
       eigenCredits,
-    });
+    };
+
+    return NextResponse.json(publicView);
   } catch (err) {
-    console.error("JD get error:", err);
-    return NextResponse.json(
-      { error: "Failed to load job", details: String(err) },
-      { status: 500 }
-    );
+    log("error", "jd.get_failed", { route: "/api/jd/[jobId]" }, err);
+    return NextResponse.json({ error: "Failed to load job" }, { status: 500 });
   }
 }
 
 /** DELETE /api/jd/[jobId] — deletes the job document, all linked candidates, and their resume files in storage. */
 export async function DELETE(_req: Request, context: RouteContext) {
+  const requestId = getRequestId(_req.headers);
+  const route = "/api/jd/[jobId]";
   try {
+    const auth = await requireFirebaseUser(_req.headers);
+    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
     const { jobId } = await context.params;
     if (!jobId) {
       return NextResponse.json({ error: "jobId required" }, { status: 400 });
     }
     const db = getAdminDb();
+    const jobSnap = await db.collection("jds").doc(jobId).get();
+    const owner = jobSnap.data()?.userId;
+    if (!owner || owner !== auth.userId) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
 
     const candSnap = await db.collection("candidates").where("matchData.jobId", "==", jobId).get();
 
@@ -80,9 +126,9 @@ export async function DELETE(_req: Request, context: RouteContext) {
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("JD delete error:", err);
+    log("error", "jd.delete_failed", { requestId, route }, err);
     return NextResponse.json(
-      { error: "Failed to delete pipeline", details: String(err) },
+      { error: "Failed to delete pipeline" },
       { status: 500 }
     );
   }

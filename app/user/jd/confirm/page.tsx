@@ -4,7 +4,19 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { usePageTitle } from "@/lib/use-page-title";
+
+type JDForm = {
+  title: string;
+  seniority: string;
+  role_category: string;
+  location_type: string;
+  yoe_required: string;
+  employment_type: string;
+  work_auth_us_required: boolean;
+  work_auth_eu_required: boolean;
+  work_auth_provided: boolean;
+  submissionCap?: number | "" | undefined;
+};
 
 function parseCommaSeparated(value: string): string[] {
   return value
@@ -50,7 +62,7 @@ function buildOneLiner(
 function JDConfirmContent() {
   const router = useRouter();
   const [authChecking, setAuthChecking] = useState(true);
-  const [form, setForm] = useState<any>(null);
+  const [form, setForm] = useState<JDForm | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +112,18 @@ function JDConfirmContent() {
         if (typeof parsed.submissionCap !== "number" || parsed.submissionCap < 1) {
           parsed.submissionCap = undefined;
         }
-        setForm(parsed);
+        setForm({
+          title: String(parsed.title ?? ""),
+          seniority: String(parsed.seniority ?? ""),
+          role_category: String(parsed.role_category ?? ""),
+          location_type: String(parsed.location_type ?? ""),
+          yoe_required: String(parsed.yoe_required ?? ""),
+          employment_type: String(parsed.employment_type ?? ""),
+          work_auth_us_required: Boolean(parsed.work_auth_us_required),
+          work_auth_eu_required: Boolean(parsed.work_auth_eu_required),
+          work_auth_provided: Boolean(parsed.work_auth_provided),
+          submissionCap: parsed.submissionCap,
+        });
         if (Array.isArray(parsed.primary)) setPrimaryRaw(parsed.primary.join(", "));
         if (Array.isArray(parsed.secondary)) setSecondaryRaw(parsed.secondary.join(", "));
         if (Array.isArray(parsed.tertiary)) setTertiaryRaw(parsed.tertiary.join(", "));
@@ -169,14 +192,15 @@ function JDConfirmContent() {
     );
   }
 
-  const update = (field: string, value: any) =>
-    setForm((p: any) => ({ ...p, [field]: value }));
+  const update = <K extends keyof JDForm>(field: K, value: JDForm[K]) =>
+    setForm((p) => ({ ...(p ?? ({} as JDForm)), [field]: value }));
 
   const primary = parseCommaSeparated(primaryRaw);
   const secondary = parseCommaSeparated(secondaryRaw);
   const tertiary = parseCommaSeparated(tertiaryRaw);
-  const generatedOneLiner = buildOneLiner(form.title || "", primary, secondary, tertiary);
-  const cleanTitleVal = cleanTitle(form.title || "");
+  const titleStr = form.title ?? "";
+  const generatedOneLiner = buildOneLiner(titleStr, primary, secondary, tertiary);
+  const cleanTitleVal = cleanTitle(titleStr);
   const suffix = generatedOneLiner.substring(cleanTitleVal.length);
 
   const handleContinue = async () => {
@@ -197,6 +221,7 @@ function JDConfirmContent() {
     }
     setSaving(true);
     try {
+      const token = await auth.currentUser?.getIdToken();
       const payload = {
         ...form,
         submissionCap: num,
@@ -207,12 +232,14 @@ function JDConfirmContent() {
           tertiary,
           one_liner: generatedOneLiner,
         },
-        userId: auth.currentUser?.uid ?? null,
         ...(jobIdFromUrl ? { jobId: jobIdFromUrl } : {}),
       };
       const res = await fetch("/api/jd/save", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Failed to save JD");

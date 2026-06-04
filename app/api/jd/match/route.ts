@@ -1,14 +1,52 @@
 import { NextResponse } from "next/server";
-import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { getAdminDb, FieldValue, freshResumeUrl } from "@/lib/firebase-admin";
+import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
+import { buildEtiDistributionFromScores, type EtiDistribution } from "@/lib/eti-distribution";
+import { requireFirebaseUser } from "@/lib/auth-server";
+import {
+  getRoleFitCachedLabelsBatch,
+  setRoleFitCachedLabelsBatch,
+} from "@/lib/rolefit-cache";
+import { getRequestId, log, timeMs, type LogContext } from "@/lib/server-logger";
 
 /**
  * Match route: Gemini 2.5 Flash for JD vs Candidate role-fit comparison.
  * 1) Load JD + candidates where matchData.jobId == jobId
  * 2) Role-fit: Gemini compares jd.role_fit one_liner vs candidate.profile.role_fit (MATCH / ADJACENT / NO MATCH)
+ *    - Three-layer cache: hot (per-instance Map) → durable (Firestore roleFitCache, batched getAll)
+ *    - Uncached candidates are chunked (CHUNK_SIZE) and classified in parallel
+ *      (MAX_PARALLELISM concurrent Gemini calls), each with retry + timeout
+ *    - Any chunk that exhausts retries throws; we never silently drop candidates
  * 3) ETI >= 50, work auth (location + employment are enforced at intake)
  * 4) Sort by ETI DESC, return top 10
+ *
+ * Scale envelope (sync; see FAANG-Analysis.txt 2026-06-03 entry):
+ *   - 500 candidates  : ~10s
+ *   - 2,000 candidates: ~10s (single parallel round)
+ *   - 5,000 candidates: ~30s (3 parallel rounds)
+ *   - 10,000 candidates: ~50s (5 parallel rounds, near maxDuration ceiling)
+ * Above ~10,000 candidates per match, move to an async job pattern modeled on
+ * /api/worker/evaluate (evaluationJobs collection, claim-and-process).
  */
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
+// --- Role-fit batching configuration ---------------------------------------
+// CHUNK_SIZE keeps Gemini output well under the 8192-token default cap
+// (~7 tokens per "N → LABEL" line × 200 = ~1400 tokens, leaves headroom).
+const CHUNK_SIZE = 200;
+// MAX_PARALLELISM caps concurrent Gemini calls; well inside Flash paid-tier
+// RPM/TPM limits at any realistic match size.
+const MAX_PARALLELISM = 10;
+// Per-chunk timeout. Median 8-15s, p99 ~30s in practice; 45s gives headroom.
+const PER_CHUNK_TIMEOUT_MS = 45_000;
+// Two retries (three total attempts) with exponential backoff.
+const MAX_RETRIES = 2;
+// Output token budget per candidate ("N → ADJACENT\n" ≈ 7-10 tokens; 12 = buffer).
+const OUTPUT_TOKENS_PER_CANDIDATE = 12;
+const OUTPUT_TOKENS_BUFFER = 100;
 
 const ROLE_FIT_PROMPT = `
 You are a senior hiring-matching assistant.
@@ -91,95 +129,332 @@ function getCandidateRoleFitOneLiner(candidate: { profile?: { role_fit?: unknown
   return "";
 }
 
-const roleFitCache = new Map<string, string>();
+type RoleFitLabel = "MATCH" | "ADJACENT" | "NO MATCH";
 
-async function geminiBatchMatch(jdRoleFit: string, candidateOneLiners: string[]): Promise<string[]> {
+/**
+ * Concurrency-limited map. Returns PromiseSettledResult[] so successful items
+ * complete their side effects (cache writes) before any rejection surfaces.
+ */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  parallelism: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        const value = await fn(items[i], i);
+        results[i] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  };
+
+  const lanes = Math.max(1, Math.min(parallelism, items.length));
+  await Promise.all(Array.from({ length: lanes }, () => worker()));
+  return results;
+}
+
+/**
+ * Classify one chunk of candidate role-fit lines via a single Gemini call.
+ *
+ * Failure semantics:
+ *   - AbortController-less timeout via Promise.race (the SDK does not surface
+ *     a cancellation signal; the racing promise lets us bound wall-clock time).
+ *   - Up to MAX_RETRIES retries with exponential backoff.
+ *   - If Gemini returns fewer than 80% of expected lines we treat it as a
+ *     failure rather than silently filling "NO MATCH" — this is the bug class
+ *     the previous single-call implementation suffered above ~800 candidates.
+ *   - On exhausted retries: throw. The caller decides whether to fail the
+ *     whole request or degrade.
+ */
+async function classifyChunkWithGemini(
+  model: GenerativeModel,
+  jdRoleFit: string,
+  chunkLines: string[],
+  chunkIndex: number,
+  ctx: LogContext
+): Promise<RoleFitLabel[]> {
+  const expectedOutputTokens =
+    chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER;
+
+  let prompt = `${ROLE_FIT_PROMPT}\n\nJD:\n${jdRoleFit}\n\nCandidates:\n`;
+  chunkLines.forEach((line, idx) => {
+    prompt += `${idx + 1}. ${line}\n`;
+  });
+
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const t = timeMs();
+    try {
+      const generatePromise = model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0,
+          topK: 1,
+          topP: 1,
+          maxOutputTokens: expectedOutputTokens,
+        },
+      });
+      const result = await Promise.race([
+        generatePromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("gemini_timeout")),
+            PER_CHUNK_TIMEOUT_MS
+          )
+        ),
+      ]);
+
+      const raw = result.response.text() ?? "";
+      const lines = raw
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      const labels: RoleFitLabel[] = new Array(chunkLines.length).fill("NO MATCH");
+      let parsed = 0;
+      for (const line of lines) {
+        const m = line.match(/^(\d+)\s*→\s*(MATCH|ADJACENT|NO MATCH)/i);
+        if (!m) continue;
+        const idx = Number(m[1]) - 1;
+        if (idx < 0 || idx >= chunkLines.length) continue;
+        labels[idx] = m[2].toUpperCase() as RoleFitLabel;
+        parsed++;
+      }
+
+      // Coverage guard: surface truncated / malformed responses instead of
+      // silently filling "NO MATCH" for the missing tail.
+      if (parsed < Math.ceil(chunkLines.length * 0.8)) {
+        throw new Error(
+          `gemini_parse_short: parsed ${parsed} of ${chunkLines.length}`
+        );
+      }
+
+      log("info", "match.rolefit_chunk_ok", {
+        ...ctx,
+        chunkIndex,
+        chunkSize: chunkLines.length,
+        parsed,
+        attempt,
+        latencyMs: t(),
+      });
+      return labels;
+    } catch (err) {
+      lastError = err;
+      const isLast = attempt === MAX_RETRIES;
+      log(
+        "warn",
+        "match.rolefit_chunk_attempt_failed",
+        {
+          ...ctx,
+          chunkIndex,
+          chunkSize: chunkLines.length,
+          attempt,
+          retrying: !isLast,
+          latencyMs: t(),
+        },
+        err
+      );
+      if (!isLast) {
+        // 1.5s, 3s backoff
+        await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt)));
+      }
+    }
+  }
+
+  log(
+    "error",
+    "match.rolefit_chunk_failed",
+    {
+      ...ctx,
+      chunkIndex,
+      chunkSize: chunkLines.length,
+      attempts: MAX_RETRIES + 1,
+    },
+    lastError
+  );
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("rolefit_chunk_failed");
+}
+
+async function geminiBatchMatch(
+  jdRoleFit: string,
+  candidateOneLiners: string[],
+  ctx: LogContext
+): Promise<string[]> {
   if (!jdRoleFit) {
+    // Preserve legacy fail-open: with no JD role-fit signal, classify all as MATCH
     return candidateOneLiners.map(() => "MATCH");
   }
 
-  const results: (string | undefined)[] = new Array(candidateOneLiners.length).fill(undefined);
-  const uncachedIndices: number[] = [];
-  const uncachedOneLiners: string[] = [];
+  const tTotal = timeMs();
+  const N = candidateOneLiners.length;
+  const results: (RoleFitLabel | undefined)[] = new Array(N);
 
-  for (let i = 0; i < candidateOneLiners.length; i++) {
-    const candidateRoleFit = (candidateOneLiners[i] || "").trim();
+  // -----------------------------------------------------------------------
+  // Phase 1: hot cache (per-instance Map). Survives across requests in a
+  // warm function instance — cheap big win on repeated matches.
+  // -----------------------------------------------------------------------
+  const g = globalThis as unknown as { __roleFitHotCache?: Map<string, RoleFitLabel> };
+  const hotCache: Map<string, RoleFitLabel> =
+    g.__roleFitHotCache ?? (g.__roleFitHotCache = new Map<string, RoleFitLabel>());
 
-    if (!candidateRoleFit) {
+  const needsDurable: { idx: number; key: string; line: string }[] = [];
+  let hotHits = 0;
+
+  for (let i = 0; i < N; i++) {
+    const line = (candidateOneLiners[i] || "").trim();
+    if (!line) {
       results[i] = "NO MATCH";
       continue;
     }
-
-    const key = `${jdRoleFit}::${candidateRoleFit}`;
-    const cached = roleFitCache.get(key);
-    if (cached) {
-      results[i] = cached;
+    const key = `${jdRoleFit}::${line}`;
+    const hot = hotCache.get(key);
+    if (hot) {
+      results[i] = hot;
+      hotHits++;
       continue;
     }
-
-    uncachedIndices.push(i);
-    uncachedOneLiners.push(candidateRoleFit);
+    needsDurable.push({ idx: i, key, line });
   }
 
-  if (uncachedOneLiners.length === 0) {
-    return results.map((r) => (r ?? "NO MATCH"));
+  // -----------------------------------------------------------------------
+  // Phase 2: durable cache (Firestore roleFitCache), batched via getAll.
+  // N point reads → ceil(N / 400) round trips.
+  // -----------------------------------------------------------------------
+  const needsLlm: { idx: number; key: string; line: string }[] = [];
+  let durableHits = 0;
+
+  if (needsDurable.length > 0) {
+    const tDur = timeMs();
+    const labels = await getRoleFitCachedLabelsBatch(
+      needsDurable.map((n) => n.key)
+    );
+    log("info", "match.rolefit_durable_lookup", {
+      ...ctx,
+      keys: needsDurable.length,
+      latencyMs: tDur(),
+    });
+    for (let j = 0; j < needsDurable.length; j++) {
+      const item = needsDurable[j];
+      const label = labels[j];
+      if (label === "MATCH" || label === "ADJACENT" || label === "NO MATCH") {
+        hotCache.set(item.key, label);
+        results[item.idx] = label;
+        durableHits++;
+      } else {
+        needsLlm.push(item);
+      }
+    }
   }
 
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  if (needsLlm.length === 0) {
+    log("info", "match.rolefit_batch_done", {
+      ...ctx,
+      candidates: N,
+      hotHits,
+      durableHits,
+      llmCalls: 0,
+      chunks: 0,
+      latencyMs: tTotal(),
+    });
+    return results.map((r) => r ?? "NO MATCH");
+  }
+
+  // -----------------------------------------------------------------------
+  // Phase 3: chunked parallel Gemini classification.
+  // -----------------------------------------------------------------------
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+  const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
-    generationConfig: {
-      temperature: 0,
-      topK: 1,
-      topP: 1,
-    },
+    generationConfig: { temperature: 0, topK: 1, topP: 1 },
   });
 
-  let prompt = `${ROLE_FIT_PROMPT}
+  const chunks: { idx: number; key: string; line: string }[][] = [];
+  for (let i = 0; i < needsLlm.length; i += CHUNK_SIZE) {
+    chunks.push(needsLlm.slice(i, i + CHUNK_SIZE));
+  }
 
-JD:
-${jdRoleFit}
-
-Candidates:
-`;
-
-  uncachedOneLiners.forEach((line, idx) => {
-    const displayIndex = idx + 1;
-    prompt += `${displayIndex}. ${line}\n`;
+  log("info", "match.rolefit_llm_start", {
+    ...ctx,
+    candidates: N,
+    hotHits,
+    durableHits,
+    needsLlm: needsLlm.length,
+    chunks: chunks.length,
+    chunkSize: CHUNK_SIZE,
+    parallelism: MAX_PARALLELISM,
   });
 
-  const result = await model.generateContent(prompt);
-  const raw = result.response.text() ?? "";
+  const settled = await runWithConcurrency(
+    chunks,
+    MAX_PARALLELISM,
+    async (chunk, chunkIdx) => {
+      const lines = chunk.map((c) => c.line);
+      const labels = await classifyChunkWithGemini(
+        model,
+        jdRoleFit,
+        lines,
+        chunkIdx,
+        ctx
+      );
+      // Populate results + hot cache synchronously so a later chunk failure
+      // doesn't drop in-flight work. Durable cache write is fire-and-forget.
+      const writeEntries: { key: string; label: string }[] = [];
+      for (let i = 0; i < chunk.length; i++) {
+        const { idx, key } = chunk[i];
+        const label = labels[i];
+        results[idx] = label;
+        hotCache.set(key, label);
+        writeEntries.push({ key, label });
+      }
+      setRoleFitCachedLabelsBatch(writeEntries).catch((err) => {
+        log(
+          "warn",
+          "match.rolefit_cache_write_failed",
+          { ...ctx, chunkIndex: chunkIdx, entries: writeEntries.length },
+          err
+        );
+      });
+    }
+  );
 
-  const lines = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const normalizedResults: ("MATCH" | "ADJACENT" | "NO MATCH")[] = new Array(uncachedOneLiners.length).fill("NO MATCH");
-
-  for (const line of lines) {
-    const match = line.match(/^(\d+)\s*→\s*(MATCH|ADJACENT|NO MATCH)/i);
-    if (!match) continue;
-
-    const idx = Number(match[1]) - 1;
-    if (idx < 0 || idx >= uncachedOneLiners.length) continue;
-
-    const label = match[2].toUpperCase() as "MATCH" | "ADJACENT" | "NO MATCH";
-    normalizedResults[idx] = label;
+  const failedChunks = settled.filter((s) => s.status === "rejected").length;
+  if (failedChunks > 0) {
+    log("error", "match.rolefit_batch_failed", {
+      ...ctx,
+      candidates: N,
+      chunks: chunks.length,
+      failedChunks,
+      latencyMs: tTotal(),
+    });
+    throw new Error(
+      `rolefit_match_failed: ${failedChunks}/${chunks.length} chunks failed`
+    );
   }
 
-  for (let i = 0; i < uncachedIndices.length; i++) {
-    const originalIndex = uncachedIndices[i];
-    const candidateRoleFit = uncachedOneLiners[i];
-    const label = normalizedResults[i] ?? "NO MATCH";
+  log("info", "match.rolefit_batch_done", {
+    ...ctx,
+    candidates: N,
+    hotHits,
+    durableHits,
+    llmCalls: chunks.length,
+    chunks: chunks.length,
+    latencyMs: tTotal(),
+  });
 
-    const key = `${jdRoleFit}::${candidateRoleFit}`;
-    roleFitCache.set(key, label);
-    results[originalIndex] = label;
-  }
-
-  return results.map((r) => (r ?? "NO MATCH"));
+  return results.map((r) => r ?? "NO MATCH");
 }
 
 function workAuthMatch(
@@ -220,16 +495,29 @@ type CandidateDoc = {
   [k: string]: unknown;
 };
 
-async function runMatch(jdId: string): Promise<{ success: boolean; top10?: unknown[]; error?: string }> {
+async function runMatch(
+  jdId: string,
+  requesterUserId: string,
+  ctx: LogContext
+): Promise<{ success: boolean; top10?: unknown[]; etiDistribution?: EtiDistribution; seniority?: string; error?: string }> {
+  const tRun = timeMs();
   const db = getAdminDb();
   const snap = await db.collection("jds").doc(jdId).get();
   if (!snap.exists) {
     return { success: false, error: "Job not found" };
   }
   const jd = { id: snap.id, ...snap.data() } as Record<string, unknown>;
+  const owner = typeof jd.userId === "string" ? jd.userId : null;
+  if (!owner || owner !== requesterUserId) {
+    return { success: false, error: "Forbidden" };
+  }
 
   const cached = jd.matchResult as { top10?: unknown[] } | undefined;
   if (cached?.top10 && Array.isArray(cached.top10)) {
+    const poolSnap = await db.collection("candidates").where("matchData.jobId", "==", jdId).get();
+    const etiDistribution = buildEtiDistributionFromScores(
+      poolSnap.docs.map((d) => Number((d.data() as CandidateDoc).score) || 0)
+    );
     const enriched = await Promise.all(
       (
         cached.top10 as {
@@ -244,19 +532,24 @@ async function runMatch(jdId: string): Promise<{ success: boolean; top10?: unkno
           const candSnap = await db.collection("candidates").doc(item.id).get();
           if (!candSnap.exists) return item;
           const d = candSnap.data();
+          // Always regenerate the resume URL fresh — persisted URLs are
+          // intentionally short-lived (see bugs-fixed/storage.txt).
+          const resumePath = typeof d?.resumePath === "string" ? d.resumePath : null;
+          const resumeUrl = await freshResumeUrl(resumePath);
           return {
             ...item,
             candidateName: d?.candidateName ?? item.candidateName ?? "",
             email: d?.email ?? item.email ?? "",
             phone: d?.phone ?? item.phone ?? null,
             yoe: d?.yoe ?? item.yoe,
+            resume_url: resumeUrl,
           };
         } catch {
           return item;
         }
       })
     );
-    return { success: true, top10: enriched };
+    return { success: true, top10: enriched, etiDistribution, seniority: String(jd.seniority ?? "") };
   }
 
   const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
@@ -270,8 +563,20 @@ async function runMatch(jdId: string): Promise<{ success: boolean; top10?: unkno
     list.push({ id: d.id, ...data } as CandidateDoc);
   });
 
+  const etiDistribution = buildEtiDistributionFromScores(list.map((c) => Number(c.score) || 0));
+
   const candidateRoleFits = list.map((c) => getCandidateRoleFitOneLiner(c));
-  const roleFitResults = await geminiBatchMatch(jdRoleFitOneLiner, candidateRoleFits);
+  log("info", "match.pool_loaded", {
+    ...ctx,
+    jdId,
+    poolSize: list.length,
+    jdRoleFitPresent: Boolean(jdRoleFitOneLiner),
+  });
+  const roleFitResults = await geminiBatchMatch(
+    jdRoleFitOneLiner,
+    candidateRoleFits,
+    { ...ctx, jdId }
+  );
   list = list.filter((_, i) => {
     const label = roleFitResults[i];
     return label === "MATCH" || label === "ADJACENT";
@@ -285,49 +590,96 @@ async function runMatch(jdId: string): Promise<{ success: boolean; top10?: unkno
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   const top = list.slice(0, 10);
 
-  const top10 = top.map((c) => ({
-    id: c.id,
-    score: c.score,
-    yoe: c.yoe,
-    profile: c.profile,
-    role_fit: c.profile?.role_fit,
-    candidateName: c.candidateName,
-    email: c.email,
-    phone: c.phone ?? null,
-    matchData: c.matchData,
-    resume_url: (c.resumeUrl ?? c.resume_url) as string | undefined,
-  }));
+  // Build the response with freshly-minted resume URLs. The URL is intentionally
+  // NOT persisted on the JD doc — only the candidate id is, so the cached path
+  // regenerates short-lived URLs on each read (see bugs-fixed/storage.txt).
+  const top10 = await Promise.all(
+    top.map(async (c) => {
+      const resumePath = (c as { resumePath?: unknown }).resumePath;
+      const resumeUrl = await freshResumeUrl(
+        typeof resumePath === "string" ? resumePath : null
+      );
+      return {
+        id: c.id,
+        score: c.score,
+        yoe: c.yoe,
+        profile: c.profile,
+        role_fit: c.profile?.role_fit,
+        candidateName: c.candidateName,
+        email: c.email,
+        phone: c.phone ?? null,
+        matchData: c.matchData,
+        resume_url: resumeUrl,
+      };
+    })
+  );
+
+  // Persist a slim copy: omit resume_url so the cache doesn't pin a stale URL.
+  const top10Persisted = top10.map(({ resume_url: _omit, ...rest }) => {
+    void _omit;
+    return rest;
+  });
 
   try {
     await db.collection("jds").doc(jdId).update({
       matchResult: {
-        top10,
+        top10: top10Persisted,
         completedAt: FieldValue.serverTimestamp(),
       },
     });
   } catch (writeErr) {
-    console.error("Match result cache write failed:", writeErr);
+    log(
+      "warn",
+      "match.result_cache_write_failed",
+      { ...ctx, jdId },
+      writeErr
+    );
   }
 
-  return { success: true, top10 };
+  log("info", "match.run_ok", {
+    ...ctx,
+    jdId,
+    poolSize: roleFitResults.length,
+    matchOrAdjacent: roleFitResults.filter(
+      (r) => r === "MATCH" || r === "ADJACENT"
+    ).length,
+    afterFilters: list.length,
+    top10Count: top10.length,
+    latencyMs: tRun(),
+  });
+
+  return { success: true, top10, etiDistribution, seniority: String(jd.seniority ?? "") };
 }
 
 /** GET /api/jd/match?jobId=ABC123 */
 export async function GET(req: Request) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/jd/match";
   try {
+    const auth = await requireFirebaseUser(req.headers);
+    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+
     const url = new URL(req.url);
     const jobId = url.searchParams.get("jobId");
     if (!jobId) {
       return NextResponse.json({ success: false, error: "jobId required" }, { status: 400 });
     }
-    const result = await runMatch(jobId);
+    const t = timeMs();
+    const ctx: LogContext = { requestId, route, userId: auth.userId, jobId };
+    const result = await runMatch(jobId, auth.userId, ctx);
     if (!result.success && result.error) {
-      const status = result.error === "Job not found" ? 404 : 400;
+      const status = result.error === "Job not found" ? 404 : result.error === "Forbidden" ? 403 : 400;
       return NextResponse.json({ success: false, error: result.error }, { status });
     }
-    return NextResponse.json({ success: true, top10: result.top10 ?? [] });
+    log("info", "jd.match_ok", { requestId, route, jobId, userId: auth.userId, latencyMs: t() });
+    return NextResponse.json({
+      success: true,
+      top10: result.top10 ?? [],
+      etiDistribution: result.etiDistribution ?? buildEtiDistributionFromScores([]),
+      seniority: result.seniority ?? "",
+    });
   } catch (err) {
-    console.error("Match API GET error:", err);
+    log("error", "jd.match_get_failed", { requestId, route }, err);
     return NextResponse.json(
       { success: false, error: "Server error", detail: String(err) },
       { status: 500 }
@@ -337,66 +689,41 @@ export async function GET(req: Request) {
 
 /** POST /api/jd/match — body: { jobId } or { jd } for backward compat; when jobId provided uses PST matching */
 export async function POST(req: Request) {
+  const requestId = getRequestId(req.headers);
+  const route = "/api/jd/match";
   try {
+    const auth = await requireFirebaseUser(req.headers);
+    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+
     const body = await req.json().catch(() => ({}));
     const jdId = body.jobId ?? body.jdId;
     const jdBody = body.jd;
 
     if (jdId) {
-      const result = await runMatch(String(jdId));
+      const t = timeMs();
+      const ctx: LogContext = { requestId, route, userId: auth.userId, jobId: String(jdId) };
+      const result = await runMatch(String(jdId), auth.userId, ctx);
       if (!result.success && result.error) {
-        const status = result.error === "Job not found" ? 404 : 400;
+        const status = result.error === "Job not found" ? 404 : result.error === "Forbidden" ? 403 : 400;
         return NextResponse.json({ success: false, error: result.error }, { status });
       }
-      return NextResponse.json({ success: true, top10: result.top10 ?? [] });
+      log("info", "jd.match_ok", { requestId, route, jobId: String(jdId), userId: auth.userId, latencyMs: t() });
+      return NextResponse.json({
+        success: true,
+        top10: result.top10 ?? [],
+        etiDistribution: result.etiDistribution ?? buildEtiDistributionFromScores([]),
+        seniority: result.seniority ?? "",
+      });
     }
 
     if (!jdBody) {
       return NextResponse.json({ error: "jdId or jd required" }, { status: 400 });
     }
 
-    const db = getAdminDb();
-    const jd = jdBody as Record<string, unknown>;
-    const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
-    const jobLocationTypes = toArray(jd.location_type).map(String).map(normalizeLocation).filter(Boolean);
-    const jobAuth = (jd.work_auth_requirement as Record<string, boolean> | undefined) ?? {};
-
-    const candidatesSnap = await db.collection("candidates").get();
-    let list: CandidateDoc[] = [];
-    candidatesSnap.docs.forEach((d) => {
-      const data = d.data() as Omit<CandidateDoc, "id">;
-      list.push({ id: d.id, ...data } as CandidateDoc);
-    });
-
-    const candidateRoleFits = list.map((c) => getCandidateRoleFitOneLiner(c));
-    const roleFitResults = await geminiBatchMatch(jdRoleFitOneLiner, candidateRoleFits);
-    list = list.filter((_, i) => {
-      const label = roleFitResults[i];
-      return label === "MATCH" || label === "ADJACENT";
-    });
-    list = list.filter((c) => (c.score ?? 0) >= 50);
-    list = list.filter((c) =>
-      workAuthMatch(jobAuth, jobLocationTypes, (c.matchData as Record<string, unknown>)?.authRegions as string[] | undefined)
-    );
-
-    list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-    const top = list.slice(0, 10);
-    const top10 = top.map((c) => ({
-      id: c.id,
-      score: c.score,
-      yoe: c.yoe,
-      profile: c.profile,
-      role_fit: c.profile?.role_fit,
-      candidateName: c.candidateName,
-      email: c.email,
-      phone: c.phone ?? null,
-      matchData: c.matchData,
-      resume_url: (c.resumeUrl ?? c.resume_url) as string | undefined,
-    }));
-
-    return NextResponse.json({ success: true, top10 });
+    // Backward-compat body mode is not authorized (it can bypass owner checks).
+    return NextResponse.json({ success: false, error: "jobId required" }, { status: 400 });
   } catch (err) {
-    console.error("Match API POST error:", err);
+    log("error", "jd.match_post_failed", { requestId, route }, err);
     return NextResponse.json(
       { error: "Server error", detail: String(err) },
       { status: 500 }

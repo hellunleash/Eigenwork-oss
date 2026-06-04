@@ -4,16 +4,20 @@ import { useEffect, useState, Suspense, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { usePageTitle } from "@/lib/use-page-title";
+import { getIdTokenOrNull } from "@/lib/auth-client";
 
 function UserCandidateCardContent() {
   usePageTitle("Candidate Profile");
   const params = useParams();
   const searchParams = useSearchParams();
-  const candidateId = params.candidateId as string;
+  const candidateId =
+    typeof (params as Record<string, unknown>)?.candidateId === "string"
+      ? String((params as Record<string, unknown>).candidateId)
+      : "";
   const jobId = searchParams.get("jobId");
 
   const [data, setData] = useState<Record<string, unknown> | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(candidateId));
   const [error, setError] = useState<string | null>(null);
   
   // ETI Info tooltip state
@@ -21,26 +25,27 @@ function UserCandidateCardContent() {
   const etiTooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!candidateId) {
-      setLoading(false);
-      setError("Missing candidate");
-      return;
-    }
+    if (!candidateId) return;
     let cancelled = false;
-    fetch(`/api/candidate/${encodeURIComponent(candidateId)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(res.status === 404 ? "Candidate not found" : "Failed to load");
-        return res.json();
-      })
-      .then((doc) => {
+    (async () => {
+      try {
+        // The candidate detail endpoint requires owner auth — a stale 404
+        // here usually means the user isn't logged in or doesn't own the JD.
+        const token = await getIdTokenOrNull();
+        const res = await fetch(`/api/candidate/${encodeURIComponent(candidateId)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          throw new Error(res.status === 404 ? "Candidate not found" : "Failed to load");
+        }
+        const doc = await res.json();
         if (!cancelled) setData(doc);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load");
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
     return () => { cancelled = true; };
   }, [candidateId]);
 

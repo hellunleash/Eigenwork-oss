@@ -47,6 +47,10 @@ export default function UserDashboardPage() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const [generateModal, setGenerateModal] = useState<Pipeline | null>(null);
   const [generateLoading, setGenerateLoading] = useState(false);
+  // Elapsed seconds since the match request started, surfaced in the modal so
+  // the user has visible proof the request is still in flight. Match takes
+  // ~10s for small pools and up to ~50s for ~5k applicants.
+  const [generateElapsed, setGenerateElapsed] = useState(0);
   const [deleteModal, setDeleteModal] = useState<Pipeline | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [paddleReady, setPaddleReady] = useState(false);
@@ -119,12 +123,25 @@ export default function UserDashboardPage() {
   const handleGenerateContinue = async () => {
     if (!generateModal) return;
     setGenerateLoading(true);
+    setGenerateElapsed(0);
+    // Tick the elapsed counter once per second while the request is in flight.
+    // Cleared in the finally{} after the request settles.
+    const tickStart = Date.now();
+    const ticker = setInterval(() => {
+      setGenerateElapsed(Math.floor((Date.now() - tickStart) / 1000));
+    }, 1000);
     try {
-      const res = await fetch(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`);
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (!res.ok) throw new Error("Request failed");
       const closeRes = await fetch("/api/jd/close", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ jobId: generateModal.id }),
       });
       if (!closeRes.ok) throw new Error("Failed to close pipeline");
@@ -136,7 +153,9 @@ export default function UserDashboardPage() {
     } catch (e) {
       alert(e instanceof Error ? e.message : "Something went wrong");
     } finally {
+      clearInterval(ticker);
       setGenerateLoading(false);
+      setGenerateElapsed(0);
     }
   };
 
@@ -154,7 +173,11 @@ export default function UserDashboardPage() {
     if (!deleteModal) return;
     setDeleteLoading(true);
     try {
-      const res = await fetch(`/api/jd/${encodeURIComponent(deleteModal.id)}`, { method: "DELETE" });
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/jd/${encodeURIComponent(deleteModal.id)}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (!res.ok) throw new Error("Failed to delete");
       setDeleteModal(null);
       // Optimistically update cache, then revalidate
@@ -409,10 +432,45 @@ export default function UserDashboardPage() {
             className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Generate top candidates now?</h3>
-            <p className="text-sm text-gray-600 mb-6">
-              This will freeze new submissions for this role. Continue and generate the top candidate list?
-            </p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              {generateLoading ? "Generating top candidates…" : "Generate top candidates now?"}
+            </h3>
+
+            {generateLoading ? (
+              <>
+                <p className="text-sm text-gray-600 mb-4">
+                  Ranking your applicant pool. This usually takes 10–30 seconds and can run up to a minute for larger pools. Please don&apos;t close this window.
+                </p>
+                {/* Indeterminate progress bar.
+                    The animated stripe is driven by the inline keyframes
+                    below — kept inline so the modal is self-contained and
+                    we don't need to touch globals.css for a single
+                    component. */}
+                <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden mb-3">
+                  <div
+                    className="h-full bg-gray-900 rounded-full"
+                    style={{
+                      width: "40%",
+                      animation: "eigen-progress-slide 1.4s ease-in-out infinite",
+                    }}
+                  />
+                </div>
+                <style>{`
+                  @keyframes eigen-progress-slide {
+                    0%   { transform: translateX(-100%); }
+                    100% { transform: translateX(350%); }
+                  }
+                `}</style>
+                <p className="text-xs text-gray-500 mb-6 tabular-nums">
+                  Elapsed: {generateElapsed}s
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-gray-600 mb-6">
+                This will freeze new submissions for this role. Continue and generate the top candidate list?
+              </p>
+            )}
+
             <div className="flex gap-2 justify-end">
               <button
                 type="button"

@@ -2,7 +2,6 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { usePageTitle } from "@/lib/use-page-title";
 
 type WorkType = 'Intern' | 'Full-time' | 'Contract';
 type LocationType = 'Remote' | 'Hybrid' | 'Onsite';
@@ -42,7 +41,7 @@ function CandidatePageContent() {
   const [errors, setErrors] = useState<string[]>([]);
 
   // JD-based lock: when jobId in URL, we fetch JD and lock work type + location to JD values from confirm page
-  const [jdLoading, setJdLoading] = useState(false);
+  const [jdLoading, setJdLoading] = useState<boolean>(() => Boolean(jobIdFromUrl));
   const [jdLoadError, setJdLoadError] = useState<string | null>(null);
   const [workTypeLockedByJd, setWorkTypeLockedByJd] = useState(false);
   const [locationLockedByJd, setLocationLockedByJd] = useState(false);
@@ -55,10 +54,6 @@ function CandidatePageContent() {
   // Fetch JD when jobId is in URL; lock and set work type + location from JD (per JD confirmation page); check if link expired or paused
   useEffect(() => {
     if (!jobIdFromUrl) return;
-    setJdLoading(true);
-    setJdLoadError(null);
-    setLinkExpired(false);
-    setLinkPaused(false);
     fetch(`/api/jd/${encodeURIComponent(jobIdFromUrl)}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.status === 404 ? 'Job not found' : 'Failed to load job');
@@ -79,6 +74,9 @@ function CandidatePageContent() {
           one_liner?: string;
         };
       }) => {
+        setJdLoadError(null);
+        setLinkExpired(false);
+        setLinkPaused(false);
         const isClosed = Boolean(jd.isClosed);
         const cap = typeof jd.submissionCap === 'number' ? jd.submissionCap : 10;
         const applied = typeof jd.appliedCount === 'number' ? jd.appliedCount : 0;

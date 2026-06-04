@@ -36,7 +36,7 @@ export default function TermsPage() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">1. Acceptance of Terms</h3>
                 <p>
-                  These Terms of Service and Privacy Policy ("Terms") are entered into between you ("User", "you", "your") and EigenWork ("EigenWork", "we", "us", "our", "Company"). By accessing or using EigenWork ("the Platform", "Service"), you agree to be bound by these Terms. If you do not agree, please do not use the Platform.
+                  These Terms of Service and Privacy Policy (&quot;Terms&quot;) are entered into between you (&quot;User&quot;, &quot;you&quot;, &quot;your&quot;) and EigenWork (&quot;EigenWork&quot;, &quot;we&quot;, &quot;us&quot;, &quot;our&quot;, &quot;Company&quot;). By accessing or using EigenWork (&quot;the Platform&quot;, &quot;Service&quot;), you agree to be bound by these Terms. If you do not agree, please do not use the Platform.
                 </p>
               </div>
 
@@ -69,10 +69,10 @@ export default function TermsPage() {
                   EigenWork operates on a credit-based system. You purchase EigenCredits, which are consumed when candidates submit applications through your intake links. Each candidate evaluation consumes one EigenCredit.
                 </p>
                 <p className="mt-2">
-                  Payments are processed through Paddle.com ("Paddle"), a third-party payment processor. By purchasing EigenCredits, you agree to Paddle's terms of service and privacy policy, which are available at https://paddle.com/legal.
+                  Payments are processed through Paddle.com (&quot;Paddle&quot;), a third-party payment processor. By purchasing EigenCredits, you agree to Paddle&apos;s terms of service and privacy policy, which are available at https://paddle.com/legal.
                 </p>
                 <p className="mt-2">
-                  <strong>Refund Policy:</strong> EigenWork offers refunds in accordance with Paddle's refund policy and applicable consumer protection laws. If you are not satisfied with your purchase, you may request a refund within 14 days of purchase by contacting Paddle's customer support. Refund requests will be processed in accordance with Paddle's standard refund procedures. Once a refund is approved, Paddle will process the refund to your original payment method within 5-10 business days.
+                  <strong>Refund Policy:</strong> EigenWork offers refunds in accordance with Paddle&apos;s refund policy and applicable consumer protection laws. If you are not satisfied with your purchase, you may request a refund within 14 days of purchase by contacting Paddle&apos;s customer support. Refund requests will be processed in accordance with Paddle&apos;s standard refund procedures. Once a refund is approved, Paddle will process the refund to your original payment method within 5-10 business days.
                 </p>
                 <p className="mt-2">
                   EigenCredits do not expire, but they are non-transferable. If your account has zero EigenCredits, intake links will be paused until you purchase additional credits.
@@ -122,7 +122,7 @@ export default function TermsPage() {
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li>Use the Platform for any illegal or unauthorized purpose</li>
                   <li>Submit false, misleading, or fraudulent information</li>
-                  <li>Interfere with or disrupt the Platform's operation or security</li>
+                  <li>Interfere with or disrupt the Platform&apos;s operation or security</li>
                   <li>Attempt to reverse engineer, decompile, or extract source code from the Platform</li>
                   <li>Use automated systems to scrape or harvest data from the Platform</li>
                   <li>Share intake links in a manner that violates applicable employment or anti-discrimination laws</li>
@@ -133,14 +133,14 @@ export default function TermsPage() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">8. Intellectual Property</h3>
                 <p>
-                  The Platform, including its design, functionality, ETI scoring algorithms, and evaluation methodologies, is the property of EigenWork ("EigenWork", "the Company") and its licensors. You may not copy, modify, distribute, or create derivative works based on the Platform without EigenWork's express written permission.
+                  The Platform, including its design, functionality, ETI scoring algorithms, and evaluation methodologies, is the property of EigenWork (&quot;EigenWork&quot;, &quot;the Company&quot;) and its licensors. You may not copy, modify, distribute, or create derivative works based on the Platform without EigenWork&apos;s express written permission.
                 </p>
               </div>
 
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">9. Disclaimers and Limitations of Liability</h3>
                 <p>
-                  <strong>No Guarantees:</strong> The Platform is provided "as is" without warranties of any kind. We do not guarantee that:
+                  <strong>No Guarantees:</strong> The Platform is provided &quot;as is&quot; without warranties of any kind. We do not guarantee that:
                 </p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li>ETI scores accurately reflect candidate qualifications or potential</li>
@@ -243,7 +243,7 @@ export default function TermsPage() {
                   <li><strong>Role Matching:</strong> Job descriptions and candidate profiles are compared using Google Gemini AI to determine role-fit compatibility.</li>
                 </ul>
                 <p className="mt-2">
-                  All data sent to AI services is processed according to Google's privacy policies and terms of service. We do not use candidate data to train AI models beyond the scope of generating evaluations for your specific job postings.
+                  All data sent to AI services is processed according to Google&apos;s privacy policies and terms of service. We do not use candidate data to train AI models beyond the scope of generating evaluations for your specific job postings.
                 </p>
               </div>
 
@@ -258,7 +258,7 @@ export default function TermsPage() {
                   <li><strong>Firebase Auth:</strong> Manages user authentication and session data</li>
                 </ul>
                 <p className="mt-2">
-                  Data is stored in Google Cloud infrastructure and is subject to Google's security and privacy practices. We implement industry-standard security measures to protect your data, but no system is completely secure.
+                  Data is stored in Google Cloud infrastructure and is subject to Google&apos;s security and privacy practices. We implement industry-standard security measures to protect your data, but no system is completely secure.
                 </p>
               </div>
 
@@ -305,7 +305,7 @@ export default function TermsPage() {
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li><strong>Access:</strong> Request a copy of your personal data</li>
                   <li><strong>Rectification:</strong> Request correction of inaccurate or incomplete data</li>
-                  <li><strong>Erasure:</strong> Request deletion of your personal data ("right to be forgotten")</li>
+                  <li><strong>Erasure:</strong> Request deletion of your personal data (&quot;right to be forgotten&quot;)</li>
                   <li><strong>Restriction:</strong> Request limitation of processing in certain circumstances</li>
                   <li><strong>Data Portability:</strong> Request transfer of your data to another service provider</li>
                   <li><strong>Objection:</strong> Object to processing of your data for certain purposes</li>
@@ -337,7 +337,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">10. Children's Privacy</h3>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">10. Children&apos;s Privacy</h3>
                 <p>
                   The Platform is not intended for individuals under the age of 18. We do not knowingly collect personal information from children. If you believe we have collected information from a child, please contact us immediately.
                 </p>
