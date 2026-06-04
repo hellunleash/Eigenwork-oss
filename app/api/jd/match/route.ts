@@ -44,9 +44,16 @@ const MAX_PARALLELISM = 10;
 const PER_CHUNK_TIMEOUT_MS = 45_000;
 // Two retries (three total attempts) with exponential backoff.
 const MAX_RETRIES = 2;
-// Output token budget per candidate ("N → ADJACENT\n" ≈ 7-10 tokens; 12 = buffer).
-const OUTPUT_TOKENS_PER_CANDIDATE = 12;
-const OUTPUT_TOKENS_BUFFER = 100;
+// Output token budget per candidate. Gemini 2.5 Flash spends tokens from this
+// budget on internal "thinking" before producing the visible answer. A small
+// budget (e.g. 112 tokens for 1 candidate) gets fully consumed by reasoning
+// and the model returns truncated text like "1 → AD" instead of "1 → ADJACENT".
+// We explicitly disable thinking (thinkingConfig.thinkingBudget = 0) AND keep
+// a generous floor so truncation cannot happen on small chunks. See
+// worker/index.ts for the same fix and FAANG-Analysis.txt for context.
+const OUTPUT_TOKENS_PER_CANDIDATE = 20;
+const OUTPUT_TOKENS_BUFFER = 200;
+const OUTPUT_TOKENS_FLOOR = 512;
 
 const ROLE_FIT_PROMPT = `
 You are a senior hiring-matching assistant.
@@ -181,8 +188,10 @@ async function classifyChunkWithGemini(
   chunkIndex: number,
   ctx: LogContext
 ): Promise<RoleFitLabel[]> {
-  const expectedOutputTokens =
-    chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER;
+  const expectedOutputTokens = Math.max(
+    OUTPUT_TOKENS_FLOOR,
+    chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER
+  );
 
   let prompt = `${ROLE_FIT_PROMPT}\n\nJD:\n${jdRoleFit}\n\nCandidates:\n`;
   chunkLines.forEach((line, idx) => {
@@ -196,12 +205,16 @@ async function classifyChunkWithGemini(
     try {
       const generatePromise = model.generateContent({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
+        // thinkingConfig.thinkingBudget = 0 disables Gemini 2.5 Flash's
+        // internal reasoning so all output tokens go to the visible response.
+        // See OUTPUT_TOKENS_FLOOR comment above for the truncation story.
         generationConfig: {
           temperature: 0,
           topK: 1,
           topP: 1,
           maxOutputTokens: expectedOutputTokens,
-        },
+          thinkingConfig: { thinkingBudget: 0 },
+        } as unknown as Record<string, unknown>,
       });
       const result = await Promise.race([
         generatePromise,

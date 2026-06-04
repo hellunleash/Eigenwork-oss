@@ -80,8 +80,15 @@ const CHUNK_SIZE = 200;
 const MAX_PARALLELISM = 10;
 const PER_CHUNK_TIMEOUT_MS = 45_000;
 const MAX_RETRIES = 2;
-const OUTPUT_TOKENS_PER_CANDIDATE = 12;
-const OUTPUT_TOKENS_BUFFER = 100;
+// Gemini 2.5 Flash uses tokens from this budget for internal "thinking" before
+// producing the visible answer. With dynamic thinking enabled, a small budget
+// (e.g. 112 tokens for 1 candidate) gets entirely consumed by reasoning, and
+// the model returns only the first few chars of the answer ("1 → AD" instead
+// of "1 → ADJACENT"). We explicitly disable thinking AND keep a generous
+// per-call floor so truncation cannot happen.
+const OUTPUT_TOKENS_PER_CANDIDATE = 20;
+const OUTPUT_TOKENS_BUFFER = 200;
+const OUTPUT_TOKENS_FLOOR = 512;
 
 // Cascade delete — bounded parallelism to avoid spiking Firestore + Storage
 // at the same time. With 25 concurrent in-flight deletes a 1,000-candidate
@@ -466,7 +473,13 @@ async function classifyChunkWithGemini(
   chunkIndex: number,
   ctx: LogContext
 ): Promise<RoleFitLabel[]> {
-  const expectedOutputTokens = chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER;
+  // Use the larger of (per-candidate budget) and (floor). The floor protects
+  // small chunks (e.g. 1 candidate) from being starved when Gemini 2.5 Flash
+  // tries to "think" before producing the answer.
+  const expectedOutputTokens = Math.max(
+    OUTPUT_TOKENS_FLOOR,
+    chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER
+  );
 
   let prompt = `${ROLE_FIT_PROMPT}\n\nJD:\n${jdRoleFit}\n\nCandidates:\n`;
   chunkLines.forEach((line, idx) => {
@@ -480,12 +493,19 @@ async function classifyChunkWithGemini(
     try {
       const generatePromise = model.generateContent({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
+        // Gemini 2.5 Flash supports a `thinkingConfig` that controls how many
+        // tokens the model spends on internal reasoning before producing the
+        // visible answer. For our deterministic "classify N candidates into
+        // MATCH/ADJACENT/NO MATCH" task no reasoning is needed; we set the
+        // budget to 0 so all output tokens go to the visible response. The
+        // SDK passes unknown keys through to the API.
         generationConfig: {
           temperature: 0,
           topK: 1,
           topP: 1,
           maxOutputTokens: expectedOutputTokens,
-        },
+          thinkingConfig: { thinkingBudget: 0 },
+        } as unknown as Record<string, unknown>,
       });
       const result = await Promise.race([
         generatePromise,
@@ -509,6 +529,16 @@ async function classifyChunkWithGemini(
       }
 
       if (parsed < Math.ceil(chunkLines.length * 0.8)) {
+        // Light diagnostic on parse failure — enough to debug without dumping
+        // the full prompt or full Gemini response in normal operation.
+        log("warn", "match.rolefit_chunk_parse_short", {
+          ...ctx,
+          chunkIndex,
+          chunkSize: chunkLines.length,
+          parsed,
+          rawLen: raw.length,
+          rawPreview: raw.slice(0, 200),
+        });
         throw new Error(`gemini_parse_short: parsed ${parsed} of ${chunkLines.length}`);
       }
 
