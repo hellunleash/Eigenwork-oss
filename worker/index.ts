@@ -95,6 +95,14 @@ const OUTPUT_TOKENS_FLOOR = 512;
 // pipeline drains in roughly 8-12s.
 const CASCADE_DELETE_PARALLELISM = 25;
 
+// Number of candidates returned in the /match response. Tune in product flow.
+// Lazy enrichment downstream scales automatically up to ~50 (the per-candidate
+// Firestore point read is in a Promise.all over this slice). Above ~50, wrap
+// the enrichment loop in runWithConcurrency(top, 25, ...) to cap simultaneous
+// reads. The JSON response key is `top10` regardless of this value for
+// backward compatibility with existing frontend code.
+const TOP_MATCH_COUNT = 10;
+
 // ---------------------------------------------------------------------------
 // Auth helpers
 // ---------------------------------------------------------------------------
@@ -817,7 +825,7 @@ async function runMatch(
   );
 
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  const top = list.slice(0, 10);
+  const top = list.slice(0, TOP_MATCH_COUNT);
 
   // Re-fetch FULL docs for the top 10 only. The minimal scan above didn't
   // include candidateName, email, phone, full profile (ramp/supervision/

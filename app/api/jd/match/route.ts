@@ -55,6 +55,15 @@ const OUTPUT_TOKENS_PER_CANDIDATE = 20;
 const OUTPUT_TOKENS_BUFFER = 200;
 const OUTPUT_TOKENS_FLOOR = 512;
 
+// Number of candidates returned in the /match response. Tune in product flow.
+// Lazy enrichment downstream scales automatically up to ~50 (the per-candidate
+// Firestore point read is in a Promise.all over this slice). Above ~50, wrap
+// the enrichment loop in a concurrency-capped helper to cap simultaneous
+// reads. The JSON response key is `top10` regardless of this value for
+// backward compatibility with existing frontend code. Must match the value
+// in worker/index.ts so Vercel-fallback and Cloud Run paths agree.
+const TOP_MATCH_COUNT = 10;
+
 const ROLE_FIT_PROMPT = `
 You are a senior hiring-matching assistant.
 
@@ -610,7 +619,7 @@ async function runMatch(
   );
 
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  const top = list.slice(0, 10);
+  const top = list.slice(0, TOP_MATCH_COUNT);
 
   // Re-fetch FULL docs for the top 10 only. The minimal scan above didn't
   // include candidateName, email, phone, full profile (ramp/supervision/
