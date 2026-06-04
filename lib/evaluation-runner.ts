@@ -27,7 +27,7 @@ function extractJSON(text: string, ctx: LogContext) {
   }
 }
 
-async function safeGenerate(prompt: string, ctx: LogContext) {
+async function safeGenerate(prompt: string, ctx: LogContext): Promise<string> {
   let attempts = 0;
   while (attempts < 2) {
     try {
@@ -42,6 +42,10 @@ async function safeGenerate(prompt: string, ctx: LogContext) {
       await new Promise((r) => setTimeout(r, 1200 * attempts));
     }
   }
+  // Unreachable: the loop only exits via `return` (success) or `throw`
+  // (final failure). The throw here exists solely to satisfy TS7030
+  // ("not all code paths return a value") under stricter compiler configs.
+  throw new Error("safeGenerate: unreachable");
 }
 
 export type EvaluationInput = {

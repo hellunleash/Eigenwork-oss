@@ -71,17 +71,19 @@ async function fetchInstallationToken(): Promise<string> {
     throw new Error("github_app_env_missing");
   }
   const jwt = signAppJwt(GITHUB_APP_ISSUER, GITHUB_APP_PRIVATE_KEY);
+  // See note in rawGithubFetch about the `cache` extension to RequestInit.
+  const installInit: RequestInit & { cache?: "no-store" } = {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/vnd.github.v3+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    cache: "no-store",
+  };
   const res = await fetch(
     `https://api.github.com/app/installations/${encodeURIComponent(GITHUB_APP_INSTALLATION_ID)}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: "application/vnd.github.v3+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      cache: "no-store",
-    }
+    installInit
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -204,7 +206,15 @@ async function rawGithubFetch(url: string, opts: FetchOpts): Promise<Response> {
   };
   if (auth) headers["Authorization"] = auth;
 
-  const init: RequestInit & { next?: { revalidate: number } } = { headers };
+  // `cache` is part of the WHATWG Fetch spec and works in Node 18+ at
+  // runtime, but it isn't on the bare `RequestInit` shipped via @types/node.
+  // We extend the type so this file compiles under both the Next.js (DOM lib)
+  // and Cloud Run worker (ES2022 only) tsconfigs. `next` is Next.js-specific
+  // and is only set on the Vercel side; the worker path uses `cache` instead.
+  const init: RequestInit & {
+    next?: { revalidate: number };
+    cache?: "default" | "no-store" | "reload" | "no-cache" | "force-cache" | "only-if-cached";
+  } = { headers };
   if (opts.useNextCache) {
     init.next = { revalidate: 3600 };
   } else {

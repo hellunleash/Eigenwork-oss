@@ -112,15 +112,33 @@ export async function DELETE(_req: Request, context: RouteContext) {
 
     const candSnap = await db.collection("candidates").where("matchData.jobId", "==", jobId).get();
 
-    for (const d of candSnap.docs) {
-      const candidateId = d.id;
-      try {
-        await adminStorageDelete(`resumes/${candidateId}.pdf`);
-      } catch (storageErr) {
-        console.warn("[jd delete] Storage delete skipped for", candidateId, storageErr);
+    // Parallelize the cascade with bounded concurrency. Sequential deletion of
+    // ~500 candidates would exceed Vercel Hobby's 60s function cap; 25 in
+    // parallel drains 500 candidates in ~10-12s. For pipelines larger than
+    // that, the frontend prefers the Cloud Run /jd/cascade-delete endpoint
+    // (no Vercel cap). This Vercel route remains the rollback path.
+    const PARALLELISM = 25;
+    const docs = candSnap.docs;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = next++;
+        if (i >= docs.length) return;
+        const candidateId = docs[i].id;
+        try {
+          await adminStorageDelete(`resumes/${candidateId}.pdf`);
+        } catch (storageErr) {
+          console.warn("[jd delete] Storage delete skipped for", candidateId, storageErr);
+        }
+        try {
+          await db.collection("candidates").doc(candidateId).delete();
+        } catch (firestoreErr) {
+          console.warn("[jd delete] Firestore delete failed for", candidateId, firestoreErr);
+        }
       }
-      await db.collection("candidates").doc(candidateId).delete();
-    }
+    };
+    const lanes = Math.max(1, Math.min(PARALLELISM, docs.length));
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
 
     await db.collection("jds").doc(jobId).delete();
 

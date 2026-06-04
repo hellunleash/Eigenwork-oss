@@ -1,0 +1,29 @@
+{
+  "name": "eigenwork-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloud Run service for long-running EigenWork compute (evaluation, match, cascade-delete).",
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx watch index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google-cloud/documentai": "^9.5.0",
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "firebase-admin": "^13.0.0",
+    "openai": "^6.16.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

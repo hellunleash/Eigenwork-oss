@@ -132,9 +132,23 @@ export default function UserDashboardPage() {
     }, 1000);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
+      // Prefer Cloud Run when NEXT_PUBLIC_CLOUD_RUN_URL is set — bypasses the
+      // Vercel 60s cap so 10k-candidate pools complete reliably. Falls back to
+      // the in-Vercel /api/jd/match route when unset (instant rollback path).
+      // See docs/adr/001-vercel-cloud-run-hybrid.md.
+      const cloudRunBase = process.env.NEXT_PUBLIC_CLOUD_RUN_URL?.replace(/\/+$/, "") ?? "";
+      const res = cloudRunBase
+        ? await fetch(`${cloudRunBase}/match`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ jobId: generateModal.id }),
+          })
+        : await fetch(`/api/jd/match?jobId=${encodeURIComponent(generateModal.id)}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
       if (!res.ok) throw new Error("Request failed");
       const closeRes = await fetch("/api/jd/close", {
         method: "POST",
@@ -174,10 +188,23 @@ export default function UserDashboardPage() {
     setDeleteLoading(true);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`/api/jd/${encodeURIComponent(deleteModal.id)}`, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
+      // Prefer Cloud Run for cascade delete (no 60s cap, handles pipelines
+      // with thousands of candidates). Falls back to in-Vercel DELETE route
+      // (which is now parallelized in-place; OK for typical pool sizes).
+      const cloudRunBase = process.env.NEXT_PUBLIC_CLOUD_RUN_URL?.replace(/\/+$/, "") ?? "";
+      const res = cloudRunBase
+        ? await fetch(`${cloudRunBase}/jd/cascade-delete`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ jobId: deleteModal.id }),
+          })
+        : await fetch(`/api/jd/${encodeURIComponent(deleteModal.id)}`, {
+            method: "DELETE",
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
       if (!res.ok) throw new Error("Failed to delete");
       setDeleteModal(null);
       // Optimistically update cache, then revalidate

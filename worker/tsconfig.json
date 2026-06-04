@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "removeComments": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmitOnError": true,
+    "paths": {
+      "@/*": ["../*"]
+    }
+  },
+  "//": "Include only the worker entrypoint. TypeScript follows imports automatically, so only server-side lib files reached from index.ts are compiled — client-only files (lib/use-*, lib/swr-config, lib/firebase, lib/auth-client) are skipped.",
+  "include": ["index.ts"],
+  "exclude": ["node_modules", "dist"]
+}

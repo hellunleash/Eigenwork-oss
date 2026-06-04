@@ -1,0 +1,36 @@
+# Files Cloud Build should NOT upload as part of the worker build context.
+# The Dockerfile only needs: worker/, lib/, and (for npm install) package
+# manifests inside worker/.
+.git
+.gitignore
+.gcloudignore
+.next
+.vercel
+node_modules
+.env
+.env.local
+.env.*.local
+
+# Next.js app — not needed for the worker image
+app
+public
+postcss.config.mjs
+next.config.ts
+next-env.d.ts
+tsconfig.json
+tsconfig.tsbuildinfo
+eslint.config.mjs
+
+# Docs and meta — not needed in image
+docs
+bugs-fixed
+FAANG-Analysis.txt
+README.md
+firestore.rules
+firestore.indexes.json
+storage.rules
+firebase.json
+vercel.json
+
+# Build caches
+*.log

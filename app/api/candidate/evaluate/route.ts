@@ -341,16 +341,31 @@ export async function POST(req: NextRequest) {
 
     // Fire-and-forget worker self-trigger. Runs AFTER the response is sent
     // (via Next.js `after()`), so the candidate sees their submission redirect
-    // immediately and the worker processes asynchronously. If this fetch
-    // fails for any reason the Vercel Cron safety net (vercel.json) will
-    // claim the queued job within ~1 minute. See FAANG-Analysis.txt
-    // 2026-06-03 entry "Evaluation worker trigger".
+    // immediately and the worker processes asynchronously.
+    //
+    // Target URL resolution:
+    //   1. If CLOUD_RUN_WORKER_URL is set, fire at the Cloud Run service
+    //      (the production path post-migration; see docs/adr/001).
+    //   2. Otherwise fall back to the in-Vercel /api/worker/evaluate route
+    //      (the rollback path; instant revert by unsetting the env var).
+    //
+    // If the fetch itself fails (network, transient), the Cloud Scheduler
+    // safety-net cron (or the Vercel daily cron in fallback mode) will
+    // claim the queued job within the cron interval. See
+    // FAANG-Analysis.txt 2026-06-03 (worker trigger) and 2026-06-04
+    // (Cloud Run migration) for the architecture story.
     const workerSecret = process.env.WORKER_SECRET ?? "";
+    const cloudRunWorkerUrl = process.env.CLOUD_RUN_WORKER_URL ?? "";
     const forwardedProto = req.headers.get("x-forwarded-proto") ?? "https";
     const forwardedHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
-    if (workerSecret && forwardedHost) {
+    const workerUrlBase = cloudRunWorkerUrl
+      ? cloudRunWorkerUrl.replace(/\/+$/, "")
+      : forwardedHost
+      ? `${forwardedProto}://${forwardedHost}/api`
+      : "";
+    if (workerSecret && workerUrlBase) {
       const evaluationJobId = evalJobRef.id;
-      const workerUrl = `${forwardedProto}://${forwardedHost}/api/worker/evaluate`;
+      const workerUrl = `${workerUrlBase}/worker/evaluate`;
       after(async () => {
         try {
           const res = await fetch(workerUrl, {

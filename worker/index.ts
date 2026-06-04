@@ -1,0 +1,988 @@
+/**
+ * EigenWork Cloud Run worker service.
+ *
+ * Hosts the three long-running endpoints that exceed Vercel Hobby's 60s
+ * function cap. Architecture decision and rationale: see
+ * docs/adr/001-vercel-cloud-run-hybrid.md.
+ *
+ * Endpoints:
+ *   POST /worker/evaluate       async fire-and-forget eval (called by Vercel candidate route)
+ *   GET  /worker/evaluate       cron safety-net (called by Cloud Scheduler)
+ *   POST /match                 sync role-fit matching (called frontend-direct)
+ *   POST /jd/cascade-delete     sync JD + candidates + resumes cascade delete (frontend-direct)
+ *   GET  /health                Cloud Run liveness probe
+ *
+ * Auth model:
+ *   - worker/evaluate: x-worker-secret OR Bearer CRON_SECRET (timing-safe compare)
+ *   - match + cascade-delete: Firebase ID token in Authorization: Bearer header,
+ *     verified with the same Admin SDK as the Vercel routes.
+ *
+ * Long-running notes:
+ *   - Express does NOT abort handlers when the client disconnects (default
+ *     behavior). The Vercel `after()` fire-and-forget may time out after 60s
+ *     on the Vercel side but the Cloud Run handler keeps running to
+ *     completion. That's the entire point of this service.
+ *   - For the sync endpoints (match, cascade-delete), the frontend connects
+ *     directly to Cloud Run (NEXT_PUBLIC_CLOUD_RUN_URL), bypassing Vercel
+ *     entirely. There is no 60s wall in this path.
+ */
+
+import express, { type Request as ExpressRequest, type Response as ExpressResponse } from "express";
+import cors from "cors";
+import { timingSafeEqual } from "crypto";
+import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
+
+// Reuse the Vercel-side lib/ helpers verbatim. Same Firebase Admin SDK init,
+// same logging shape, same credit ledger, same evaluation pipeline.
+import {
+  getAdminDb,
+  getAdminAuth,
+  getAdminStorage,
+  freshResumeUrl,
+  adminStorageDelete,
+  adminStorageDownload,
+  FieldValue,
+} from "@/lib/firebase-admin";
+import { runEvaluation } from "@/lib/evaluation-runner";
+import { applyCreditMutation, makeOpId } from "@/lib/credit-ledger";
+import {
+  getRoleFitCachedLabelsBatch,
+  setRoleFitCachedLabelsBatch,
+} from "@/lib/rolefit-cache";
+import {
+  buildEtiDistributionFromScores,
+  type EtiDistribution,
+} from "@/lib/eti-distribution";
+import {
+  log,
+  timeMs,
+  type LogContext,
+} from "@/lib/server-logger";
+
+// Suppress unused warning for adminStorageDownload (referenced for parity with Vercel worker route;
+// runEvaluation handles the actual download internally via its own input).
+void adminStorageDownload;
+void getAdminStorage;
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+const WORKER_SECRET = process.env.WORKER_SECRET ?? "";
+const CRON_SECRET = process.env.CRON_SECRET ?? "";
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Match-engine constants — mirrors app/api/jd/match/route.ts.
+const CHUNK_SIZE = 200;
+const MAX_PARALLELISM = 10;
+const PER_CHUNK_TIMEOUT_MS = 45_000;
+const MAX_RETRIES = 2;
+const OUTPUT_TOKENS_PER_CANDIDATE = 12;
+const OUTPUT_TOKENS_BUFFER = 100;
+
+// Cascade delete — bounded parallelism to avoid spiking Firestore + Storage
+// at the same time. With 25 concurrent in-flight deletes a 1,000-candidate
+// pipeline drains in roughly 8-12s.
+const CASCADE_DELETE_PARALLELISM = 25;
+
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
+function secretsEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
+
+function isWorkerAuthorized(req: ExpressRequest): boolean {
+  const workerSecret = (req.header("x-worker-secret") ?? "") as string;
+  if (WORKER_SECRET && secretsEqual(workerSecret, WORKER_SECRET)) return true;
+  const authHeader = (req.header("authorization") ?? "") as string;
+  if (CRON_SECRET && secretsEqual(authHeader, `Bearer ${CRON_SECRET}`)) return true;
+  return false;
+}
+
+/**
+ * Verify a Firebase ID token from the Authorization: Bearer header.
+ * Returns the userId on success, null on any failure (the caller responds 401).
+ * Mirrors lib/auth-server.ts requireFirebaseUser shape.
+ */
+async function verifyFirebaseUser(req: ExpressRequest): Promise<string | null> {
+  const header = (req.header("authorization") ?? "") as string;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) return null;
+  const token = match[1].trim();
+  if (!token) return null;
+  try {
+    const decoded = await getAdminAuth().verifyIdToken(token, true);
+    return decoded?.uid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation worker (POST /worker/evaluate, GET /worker/evaluate for cron)
+// ---------------------------------------------------------------------------
+
+type EvalJob = {
+  candidateId: string;
+  jobId?: string | null;
+  ownerUserId?: string | null;
+  resumePath?: string | null;
+  githubUrl?: string | null;
+  experience?: string | null;
+  attempts?: number;
+  status?: "queued" | "running" | "done" | "failed";
+  lastError?: string | null;
+};
+
+async function claimJob(jobId?: string | null) {
+  const db = getAdminDb();
+
+  if (jobId) {
+    const ref = db.collection("evaluationJobs").doc(jobId);
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return { ok: false as const, error: "not_found" };
+      const data = snap.data() as EvalJob;
+      if (data.status === "running" || data.status === "done") {
+        return { ok: false as const, error: "not_claimable" };
+      }
+      tx.set(
+        ref,
+        { status: "running", startedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      return { ok: true as const, id: ref.id, data };
+    });
+  }
+
+  // Cron / unspecified path: claim oldest queued job.
+  const qs = await db
+    .collection("evaluationJobs")
+    .where("status", "==", "queued")
+    .orderBy("createdAt", "asc")
+    .limit(1)
+    .get();
+
+  if (qs.empty) return { ok: false as const, error: "none" };
+  const ref = qs.docs[0].ref;
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return { ok: false as const, error: "not_found" };
+    const data = snap.data() as EvalJob;
+    if (data.status !== "queued") return { ok: false as const, error: "not_claimable" };
+    tx.set(ref, { status: "running", startedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true as const, id: ref.id, data };
+  });
+}
+
+async function handleWorkerEvaluate(req: ExpressRequest, res: ExpressResponse): Promise<void> {
+  const requestId = (req.header("x-request-id") ?? cryptoRandom()) as string;
+  const route = "/worker/evaluate";
+
+  if (!isWorkerAuthorized(req)) {
+    res.status(403).json({ success: false, error: "forbidden" });
+    return;
+  }
+
+  // POST may carry a jobId; GET (cron) carries none.
+  const body =
+    req.method === "POST" && typeof req.body === "object" && req.body !== null
+      ? (req.body as Record<string, unknown>)
+      : {};
+  const requestedJobId = typeof body.jobId === "string" ? (body.jobId as string) : null;
+
+  const claimed = await claimJob(requestedJobId);
+  if (!claimed.ok) {
+    res.json({ success: true, claimed: false, reason: claimed.error });
+    return;
+  }
+
+  const { id: evalJobId, data } = claimed;
+  const ctx: LogContext = {
+    requestId,
+    route,
+    opId: evalJobId,
+    candidateId: data.candidateId,
+    jobId: data.jobId ?? undefined,
+    userId: data.ownerUserId ?? undefined,
+  };
+
+  const tTotal = timeMs();
+  log("info", "worker.job_claimed", ctx);
+
+  const db = getAdminDb();
+  const jobRef = db.collection("evaluationJobs").doc(evalJobId);
+  const candidateRef = db.collection("candidates").doc(data.candidateId);
+
+  try {
+    const candSnap = await candidateRef.get();
+    if (!candSnap.exists) {
+      await jobRef.set(
+        {
+          status: "failed",
+          lastError: "candidate_not_found",
+          finishedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(404).json({ success: false, error: "candidate_not_found" });
+      return;
+    }
+
+    const resumePath = data.resumePath ?? null;
+    if (!resumePath) throw new Error("missing_resume_path");
+
+    const tDl = timeMs();
+    const bytes = await adminStorageDownload(resumePath);
+    log("info", "resume.download_ok", { ...ctx, latencyMs: tDl(), bytes: bytes.byteLength });
+
+    const resumeBase64 = bytes.toString("base64");
+    const result = await runEvaluation(
+      { resumeBase64, githubUrl: data.githubUrl ?? null, experience: data.experience ?? ">=2" },
+      ctx
+    );
+
+    // Idempotent doc write: skip if score already set (re-runs of the same job).
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(candidateRef);
+      if (!snap.exists) return;
+      const d = snap.data() as { status?: string; score?: number } | undefined;
+      const alreadyScored = typeof d?.score === "number" && Number.isFinite(d.score);
+      if (alreadyScored) return;
+      tx.set(
+        candidateRef,
+        {
+          ...result,
+          status: "submitted",
+          evaluatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+
+    // Credit deduction with insufficient-balance handling (see lib/credit-ledger.ts).
+    if (data.ownerUserId) {
+      const opId = makeOpId({
+        source: "evaluation",
+        candidateId: data.candidateId,
+        jobId: data.jobId ?? "",
+        userId: data.ownerUserId,
+      });
+      const creditResult = await applyCreditMutation({
+        userId: data.ownerUserId,
+        delta: -1,
+        source: "evaluation",
+        opId,
+        metadata: {
+          candidateId: data.candidateId,
+          jobId: data.jobId ?? null,
+          evaluationJobId: evalJobId,
+        },
+      });
+      if (!creditResult.applied && creditResult.reason === "insufficient_balance") {
+        log("error", "credit.insufficient_balance_at_debit", { ...ctx, opId });
+        await candidateRef.set(
+          {
+            creditNotDeducted: true,
+            creditNotDeductedReason: "insufficient_balance",
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    await jobRef.set(
+      {
+        status: "done",
+        finishedAt: FieldValue.serverTimestamp(),
+        latencyMs: tTotal(),
+      },
+      { merge: true }
+    );
+
+    log("info", "worker.job_done", { ...ctx, latencyMs: tTotal() });
+    res.json({ success: true, claimed: true, jobId: evalJobId, candidateId: data.candidateId });
+  } catch (err) {
+    const attempts = Number(data.attempts ?? 0) + 1;
+    const lastError = err instanceof Error ? err.message : String(err);
+    const shouldRetry = attempts < 5;
+    await jobRef.set(
+      {
+        status: shouldRetry ? "queued" : "failed",
+        attempts,
+        lastError,
+        finishedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    log("error", "worker.job_failed", { ...ctx, attempts, retrying: shouldRetry, latencyMs: tTotal() }, err);
+    res.status(500).json({ success: false, error: "job_failed", retrying: shouldRetry });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Match (POST /match)  — mirrors app/api/jd/match/route.ts runMatch()
+// ---------------------------------------------------------------------------
+
+const ROLE_FIT_PROMPT = `
+You are a senior hiring-matching assistant.
+
+You will receive:
+
+JD:
+<jd one-liner>
+
+Candidates:
+1. <candidate one-liner>
+2. <candidate one-liner>
+3. <candidate one-liner>
+...
+
+Each one-liner is EXACTLY in the format:
+"<Title> (Primary | Secondary | Tertiary)"
+
+INTERPRETATION RULES:
+- PRIMARY decides the overall functional match.
+- SECONDARY can increase confidence but MUST NEVER be the reason for rejection.
+- TERTIARY is mostly ignorable and MUST NEVER cause a mismatch.
+
+ROLE-FIT DECISION HIERARCHY (PRIMARY-DRIVEN):
+- PRIMARY is the main signal for MATCH vs ADJACENT vs NO MATCH.
+- Titles can be fuzzy (e.g., "Backend", "Backend Engineer", "Backend Developer" , or just "Software Engineer" are equivalent).
+- Minor wording differences or synonyms MUST NOT cause "NO MATCH".
+
+DOMAIN FAMILIES:
+- Treat ML / AI / LLM / NLP / Computer Vision / Data / MLOps as one adjacent family.
+  - If JD and candidate are both anywhere in this family, classify at worst as ADJACENT (never NO MATCH for domain only).
+
+HARD NO MATCH CASES (when PRIMARY clearly conflicts and JD primary does NOT list both):
+- .NET backend vs Python backend (if the JD primary is only one of them, not both).
+- Frontend-only vs ML/Data roles.
+- Mobile-only vs ML/Data roles.
+- Swift-only vs a JD that explicitly requires both Android and iOS (or vice versa).
+
+CLASSIFICATION LABELS (PER CANDIDATE):
+- MATCH: Strong primary alignment with the JD role and tech focus.
+- ADJACENT: Reasonably close primary alignment or same domain family; candidate could succeed with minor ramp-up.
+- NO MATCH: Fundamental primary role/domain/stack mismatch (do NOT use secondary/tertiary to force a match).
+
+OUTPUT FORMAT:
+- For each candidate N, output EXACTLY ONE line:
+  "N → MATCH" or "N → ADJACENT" or "N → NO MATCH"
+- Use plain text only, no extra commentary, no Markdown, no bullet points.
+`;
+
+type RoleFitLabel = "MATCH" | "ADJACENT" | "NO MATCH";
+
+function toArray<T>(v: T | T[] | null | undefined): T[] {
+  if (v == null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function normalizeLocation(s: string): string {
+  const t = (s || "").trim().toLowerCase();
+  if (t === "on-site" || t === "onsite") return "onsite";
+  if (t === "remote") return "remote";
+  if (t === "hybrid") return "hybrid";
+  return (s || "").trim().toLowerCase();
+}
+
+function getJDRoleFitOneLiner(jd: Record<string, unknown>): string {
+  const rf = jd.role_fit;
+  if (rf != null && typeof rf === "object" && "one_liner" in rf) {
+    return String((rf as Record<string, unknown>).one_liner ?? "").trim();
+  }
+  if (typeof (jd as Record<string, unknown>).role_fit_one_liner === "string") {
+    return String((jd as Record<string, unknown>).role_fit_one_liner).trim();
+  }
+  return "";
+}
+
+function getCandidateRoleFitOneLiner(candidate: { profile?: { role_fit?: unknown } }): string {
+  const rf = candidate.profile?.role_fit;
+  if (typeof rf === "string") return String(rf).trim();
+  if (rf != null && typeof rf === "object" && "one_liner" in rf) {
+    return String((rf as Record<string, unknown>).one_liner ?? "").trim();
+  }
+  return "";
+}
+
+function workAuthMatch(
+  jobAuth: { us_required?: boolean; eu_required?: boolean; provided?: boolean },
+  jobLocationTypes: string[],
+  candidateAuthRegions: string[] | undefined
+): boolean {
+  if (jobAuth?.provided) return true;
+  const regions = toArray(candidateAuthRegions).map((r) => String(r).toLowerCase());
+  const hasRemoteGlobal = regions.some((r) => r.includes("remote") && r.includes("global"));
+  if (hasRemoteGlobal) {
+    const job = jobLocationTypes.map(normalizeLocation);
+    if (!job.includes("remote")) return false;
+  }
+  if (jobAuth?.us_required && !regions.some((r) => r.includes("us"))) return false;
+  if (jobAuth?.eu_required && !regions.some((r) => r.includes("eu"))) return false;
+  return true;
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  parallelism: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        const value = await fn(items[i], i);
+        results[i] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  };
+  const lanes = Math.max(1, Math.min(parallelism, items.length));
+  await Promise.all(Array.from({ length: lanes }, () => worker()));
+  return results;
+}
+
+async function classifyChunkWithGemini(
+  model: GenerativeModel,
+  jdRoleFit: string,
+  chunkLines: string[],
+  chunkIndex: number,
+  ctx: LogContext
+): Promise<RoleFitLabel[]> {
+  const expectedOutputTokens = chunkLines.length * OUTPUT_TOKENS_PER_CANDIDATE + OUTPUT_TOKENS_BUFFER;
+
+  let prompt = `${ROLE_FIT_PROMPT}\n\nJD:\n${jdRoleFit}\n\nCandidates:\n`;
+  chunkLines.forEach((line, idx) => {
+    prompt += `${idx + 1}. ${line}\n`;
+  });
+
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const t = timeMs();
+    try {
+      const generatePromise = model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0,
+          topK: 1,
+          topP: 1,
+          maxOutputTokens: expectedOutputTokens,
+        },
+      });
+      const result = await Promise.race([
+        generatePromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("gemini_timeout")), PER_CHUNK_TIMEOUT_MS)
+        ),
+      ]);
+
+      const raw = result.response.text() ?? "";
+      const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+      const labels: RoleFitLabel[] = new Array(chunkLines.length).fill("NO MATCH");
+      let parsed = 0;
+      for (const line of lines) {
+        const m = line.match(/^(\d+)\s*→\s*(MATCH|ADJACENT|NO MATCH)/i);
+        if (!m) continue;
+        const idx = Number(m[1]) - 1;
+        if (idx < 0 || idx >= chunkLines.length) continue;
+        labels[idx] = m[2].toUpperCase() as RoleFitLabel;
+        parsed++;
+      }
+
+      if (parsed < Math.ceil(chunkLines.length * 0.8)) {
+        throw new Error(`gemini_parse_short: parsed ${parsed} of ${chunkLines.length}`);
+      }
+
+      log("info", "match.rolefit_chunk_ok", {
+        ...ctx,
+        chunkIndex,
+        chunkSize: chunkLines.length,
+        parsed,
+        attempt,
+        latencyMs: t(),
+      });
+      return labels;
+    } catch (err) {
+      lastError = err;
+      const isLast = attempt === MAX_RETRIES;
+      log("warn", "match.rolefit_chunk_attempt_failed", {
+        ...ctx,
+        chunkIndex,
+        chunkSize: chunkLines.length,
+        attempt,
+        retrying: !isLast,
+        latencyMs: t(),
+      }, err);
+      if (!isLast) {
+        await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt)));
+      }
+    }
+  }
+
+  log("error", "match.rolefit_chunk_failed", {
+    ...ctx,
+    chunkIndex,
+    chunkSize: chunkLines.length,
+    attempts: MAX_RETRIES + 1,
+  }, lastError);
+  throw lastError instanceof Error ? lastError : new Error("rolefit_chunk_failed");
+}
+
+async function geminiBatchMatch(
+  jdRoleFit: string,
+  candidateOneLiners: string[],
+  ctx: LogContext
+): Promise<string[]> {
+  if (!jdRoleFit) {
+    return candidateOneLiners.map(() => "MATCH");
+  }
+
+  const tTotal = timeMs();
+  const N = candidateOneLiners.length;
+  const results: (RoleFitLabel | undefined)[] = new Array(N);
+
+  const g = globalThis as unknown as { __roleFitHotCache?: Map<string, RoleFitLabel> };
+  const hotCache: Map<string, RoleFitLabel> =
+    g.__roleFitHotCache ?? (g.__roleFitHotCache = new Map<string, RoleFitLabel>());
+
+  const needsDurable: { idx: number; key: string; line: string }[] = [];
+  let hotHits = 0;
+
+  for (let i = 0; i < N; i++) {
+    const line = (candidateOneLiners[i] || "").trim();
+    if (!line) {
+      results[i] = "NO MATCH";
+      continue;
+    }
+    const key = `${jdRoleFit}::${line}`;
+    const hot = hotCache.get(key);
+    if (hot) {
+      results[i] = hot;
+      hotHits++;
+      continue;
+    }
+    needsDurable.push({ idx: i, key, line });
+  }
+
+  const needsLlm: { idx: number; key: string; line: string }[] = [];
+  let durableHits = 0;
+
+  if (needsDurable.length > 0) {
+    const tDur = timeMs();
+    const labels = await getRoleFitCachedLabelsBatch(needsDurable.map((n) => n.key));
+    log("info", "match.rolefit_durable_lookup", {
+      ...ctx,
+      keys: needsDurable.length,
+      latencyMs: tDur(),
+    });
+    for (let j = 0; j < needsDurable.length; j++) {
+      const item = needsDurable[j];
+      const label = labels[j];
+      if (label === "MATCH" || label === "ADJACENT" || label === "NO MATCH") {
+        hotCache.set(item.key, label);
+        results[item.idx] = label;
+        durableHits++;
+      } else {
+        needsLlm.push(item);
+      }
+    }
+  }
+
+  if (needsLlm.length === 0) {
+    log("info", "match.rolefit_batch_done", {
+      ...ctx,
+      candidates: N,
+      hotHits,
+      durableHits,
+      llmCalls: 0,
+      chunks: 0,
+      latencyMs: tTotal(),
+    });
+    return results.map((r) => r ?? "NO MATCH");
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: { temperature: 0, topK: 1, topP: 1 },
+  });
+
+  const chunks: { idx: number; key: string; line: string }[][] = [];
+  for (let i = 0; i < needsLlm.length; i += CHUNK_SIZE) {
+    chunks.push(needsLlm.slice(i, i + CHUNK_SIZE));
+  }
+
+  log("info", "match.rolefit_llm_start", {
+    ...ctx,
+    candidates: N,
+    hotHits,
+    durableHits,
+    needsLlm: needsLlm.length,
+    chunks: chunks.length,
+    chunkSize: CHUNK_SIZE,
+    parallelism: MAX_PARALLELISM,
+  });
+
+  const settled = await runWithConcurrency(chunks, MAX_PARALLELISM, async (chunk, chunkIdx) => {
+    const lines = chunk.map((c) => c.line);
+    const labels = await classifyChunkWithGemini(model, jdRoleFit, lines, chunkIdx, ctx);
+    const writeEntries: { key: string; label: string }[] = [];
+    for (let i = 0; i < chunk.length; i++) {
+      const { idx, key } = chunk[i];
+      const label = labels[i];
+      results[idx] = label;
+      hotCache.set(key, label);
+      writeEntries.push({ key, label });
+    }
+    setRoleFitCachedLabelsBatch(writeEntries).catch((err) => {
+      log("warn", "match.rolefit_cache_write_failed", { ...ctx, chunkIndex: chunkIdx, entries: writeEntries.length }, err);
+    });
+  });
+
+  const failedChunks = settled.filter((s) => s.status === "rejected").length;
+  if (failedChunks > 0) {
+    log("error", "match.rolefit_batch_failed", {
+      ...ctx,
+      candidates: N,
+      chunks: chunks.length,
+      failedChunks,
+      latencyMs: tTotal(),
+    });
+    throw new Error(`rolefit_match_failed: ${failedChunks}/${chunks.length} chunks failed`);
+  }
+
+  log("info", "match.rolefit_batch_done", {
+    ...ctx,
+    candidates: N,
+    hotHits,
+    durableHits,
+    llmCalls: chunks.length,
+    chunks: chunks.length,
+    latencyMs: tTotal(),
+  });
+
+  return results.map((r) => r ?? "NO MATCH");
+}
+
+type CandidateDoc = {
+  id: string;
+  score?: number;
+  yoe?: number;
+  is_matchable?: boolean;
+  profile?: { role_fit?: unknown; [k: string]: unknown };
+  matchData?: {
+    jobId?: string;
+    workTypes?: string[] | string;
+    locations?: string[] | string;
+    authRegions?: string[] | string;
+  };
+  candidateName?: string;
+  email?: string;
+  phone?: string | null;
+  resumePath?: string;
+  experienceLevel?: string;
+  breakdown?: unknown;
+  [k: string]: unknown;
+};
+
+async function runMatch(
+  jdId: string,
+  requesterUserId: string,
+  ctx: LogContext
+): Promise<{ success: boolean; top10?: unknown[]; etiDistribution?: EtiDistribution; seniority?: string; error?: string }> {
+  const tRun = timeMs();
+  const db = getAdminDb();
+  const snap = await db.collection("jds").doc(jdId).get();
+  if (!snap.exists) return { success: false, error: "Job not found" };
+  const jd = { id: snap.id, ...snap.data() } as Record<string, unknown>;
+  const owner = typeof jd.userId === "string" ? jd.userId : null;
+  if (!owner || owner !== requesterUserId) return { success: false, error: "Forbidden" };
+
+  // Cached-path read shape matches Vercel runMatch (including fresh resume URL regeneration).
+  const cached = jd.matchResult as { top10?: unknown[] } | undefined;
+  if (cached?.top10 && Array.isArray(cached.top10)) {
+    const poolSnap = await db.collection("candidates").where("matchData.jobId", "==", jdId).get();
+    const etiDistribution = buildEtiDistributionFromScores(
+      poolSnap.docs.map((d) => Number((d.data() as CandidateDoc).score) || 0)
+    );
+    const enriched = await Promise.all(
+      (cached.top10 as { id: string; candidateName?: string; email?: string; phone?: string | null; yoe?: number }[]).map(async (item) => {
+        try {
+          const candSnap = await db.collection("candidates").doc(item.id).get();
+          if (!candSnap.exists) return item;
+          const d = candSnap.data();
+          const resumePath = typeof d?.resumePath === "string" ? d.resumePath : null;
+          const resumeUrl = await freshResumeUrl(resumePath);
+          return {
+            ...item,
+            candidateName: d?.candidateName ?? item.candidateName ?? "",
+            email: d?.email ?? item.email ?? "",
+            phone: d?.phone ?? item.phone ?? null,
+            yoe: d?.yoe ?? item.yoe,
+            resume_url: resumeUrl,
+          };
+        } catch {
+          return item;
+        }
+      })
+    );
+    return { success: true, top10: enriched, etiDistribution, seniority: String(jd.seniority ?? "") };
+  }
+
+  const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
+  const jobLocationTypes = toArray(jd.location_type).map(String).map(normalizeLocation).filter(Boolean);
+  const jobAuth = (jd.work_auth_requirement as Record<string, boolean> | undefined) ?? {};
+
+  const candidatesSnap = await db.collection("candidates").where("matchData.jobId", "==", jdId).get();
+  let list: CandidateDoc[] = [];
+  candidatesSnap.docs.forEach((d) => {
+    const data = d.data() as Omit<CandidateDoc, "id">;
+    list.push({ id: d.id, ...data } as CandidateDoc);
+  });
+
+  const etiDistribution = buildEtiDistributionFromScores(list.map((c) => Number(c.score) || 0));
+  const candidateRoleFits = list.map((c) => getCandidateRoleFitOneLiner(c));
+
+  log("info", "match.pool_loaded", { ...ctx, jdId, poolSize: list.length, jdRoleFitPresent: Boolean(jdRoleFitOneLiner) });
+
+  const roleFitResults = await geminiBatchMatch(jdRoleFitOneLiner, candidateRoleFits, { ...ctx, jdId });
+  list = list.filter((_, i) => {
+    const label = roleFitResults[i];
+    return label === "MATCH" || label === "ADJACENT";
+  });
+  list = list.filter((c) => (c.score ?? 0) >= 50);
+  list = list.filter((c) =>
+    workAuthMatch(jobAuth, jobLocationTypes, (c.matchData as Record<string, unknown>)?.authRegions as string[] | undefined)
+  );
+
+  list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  const top = list.slice(0, 10);
+
+  const top10 = await Promise.all(
+    top.map(async (c) => {
+      const resumePath = (c as { resumePath?: unknown }).resumePath;
+      const resumeUrl = await freshResumeUrl(typeof resumePath === "string" ? resumePath : null);
+      return {
+        id: c.id,
+        score: c.score,
+        yoe: c.yoe,
+        profile: c.profile,
+        role_fit: c.profile?.role_fit,
+        candidateName: c.candidateName,
+        email: c.email,
+        phone: c.phone ?? null,
+        matchData: c.matchData,
+        resume_url: resumeUrl,
+      };
+    })
+  );
+
+  const top10Persisted = top10.map(({ resume_url: _omit, ...rest }) => {
+    void _omit;
+    return rest;
+  });
+
+  try {
+    await db.collection("jds").doc(jdId).update({
+      matchResult: { top10: top10Persisted, completedAt: FieldValue.serverTimestamp() },
+    });
+  } catch (writeErr) {
+    log("warn", "match.result_cache_write_failed", { ...ctx, jdId }, writeErr);
+  }
+
+  log("info", "match.run_ok", {
+    ...ctx,
+    jdId,
+    poolSize: roleFitResults.length,
+    matchOrAdjacent: roleFitResults.filter((r) => r === "MATCH" || r === "ADJACENT").length,
+    afterFilters: list.length,
+    top10Count: top10.length,
+    latencyMs: tRun(),
+  });
+
+  return { success: true, top10, etiDistribution, seniority: String(jd.seniority ?? "") };
+}
+
+async function handleMatch(req: ExpressRequest, res: ExpressResponse): Promise<void> {
+  const requestId = (req.header("x-request-id") ?? cryptoRandom()) as string;
+  const route = "/match";
+
+  const userId = await verifyFirebaseUser(req);
+  if (!userId) {
+    res.status(401).json({ success: false, error: "unauthenticated" });
+    return;
+  }
+
+  const body =
+    typeof req.body === "object" && req.body !== null ? (req.body as Record<string, unknown>) : {};
+  const jobId =
+    typeof body.jobId === "string"
+      ? (body.jobId as string)
+      : typeof body.jdId === "string"
+      ? (body.jdId as string)
+      : null;
+  if (!jobId) {
+    res.status(400).json({ success: false, error: "jobId required" });
+    return;
+  }
+
+  const ctx: LogContext = { requestId, route, userId, jobId };
+  try {
+    const result = await runMatch(jobId, userId, ctx);
+    if (!result.success && result.error) {
+      const status = result.error === "Job not found" ? 404 : result.error === "Forbidden" ? 403 : 400;
+      res.status(status).json({ success: false, error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      top10: result.top10 ?? [],
+      etiDistribution: result.etiDistribution ?? buildEtiDistributionFromScores([]),
+      seniority: result.seniority ?? "",
+    });
+  } catch (err) {
+    log("error", "match.failed", ctx, err);
+    res.status(500).json({ success: false, error: "Server error" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JD cascade delete (POST /jd/cascade-delete)
+// ---------------------------------------------------------------------------
+
+async function handleCascadeDelete(req: ExpressRequest, res: ExpressResponse): Promise<void> {
+  const requestId = (req.header("x-request-id") ?? cryptoRandom()) as string;
+  const route = "/jd/cascade-delete";
+
+  const userId = await verifyFirebaseUser(req);
+  if (!userId) {
+    res.status(401).json({ success: false, error: "unauthenticated" });
+    return;
+  }
+
+  const body =
+    typeof req.body === "object" && req.body !== null ? (req.body as Record<string, unknown>) : {};
+  const jobId = typeof body.jobId === "string" ? (body.jobId as string) : null;
+  if (!jobId) {
+    res.status(400).json({ success: false, error: "jobId required" });
+    return;
+  }
+
+  const ctx: LogContext = { requestId, route, userId, jobId };
+  const tRun = timeMs();
+
+  try {
+    const db = getAdminDb();
+    const jobSnap = await db.collection("jds").doc(jobId).get();
+    if (!jobSnap.exists) {
+      res.status(404).json({ success: false, error: "Job not found" });
+      return;
+    }
+    const owner = jobSnap.data()?.userId;
+    if (!owner || owner !== userId) {
+      res.status(403).json({ success: false, error: "forbidden" });
+      return;
+    }
+
+    const candSnap = await db.collection("candidates").where("matchData.jobId", "==", jobId).get();
+    log("info", "jd.cascade_delete_start", { ...ctx, candidates: candSnap.size });
+
+    // Parallel delete with bounded concurrency: avoids spiking Storage + Firestore
+    // simultaneously at extreme scale, while still ~25x faster than sequential.
+    const deletions = candSnap.docs.map((d) => async () => {
+      const candidateId = d.id;
+      try {
+        await adminStorageDelete(`resumes/${candidateId}.pdf`);
+      } catch (storageErr) {
+        log("warn", "jd.cascade_storage_delete_skipped", { ...ctx, candidateId }, storageErr);
+      }
+      await db.collection("candidates").doc(candidateId).delete();
+    });
+
+    // Settle-with-concurrency over the deletion tasks.
+    await runWithConcurrency(deletions, CASCADE_DELETE_PARALLELISM, async (task) => task());
+
+    await db.collection("jds").doc(jobId).delete();
+
+    log("info", "jd.cascade_delete_done", { ...ctx, deleted: candSnap.size, latencyMs: tRun() });
+    res.json({ success: true, deleted: candSnap.size });
+  } catch (err) {
+    log("error", "jd.cascade_delete_failed", ctx, err);
+    res.status(500).json({ success: false, error: "Failed to delete pipeline" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Express bootstrap
+// ---------------------------------------------------------------------------
+
+function cryptoRandom(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+const app = express();
+
+app.use(express.json({ limit: "1mb" }));
+
+// CORS only for the frontend-direct endpoints.
+const corsOptions: cors.CorsOptions = {
+  origin(origin, cb) {
+    // Allow requests with no Origin (curl, health probes, server-to-server).
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.length === 0) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error("origin not allowed"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
+};
+
+app.use("/match", cors(corsOptions));
+app.use("/jd/cascade-delete", cors(corsOptions));
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.post("/worker/evaluate", (req, res) => {
+  void handleWorkerEvaluate(req, res);
+});
+app.get("/worker/evaluate", (req, res) => {
+  void handleWorkerEvaluate(req, res);
+});
+
+app.post("/match", (req, res) => {
+  void handleMatch(req, res);
+});
+app.post("/jd/cascade-delete", (req, res) => {
+  void handleCascadeDelete(req, res);
+});
+
+const PORT = parseInt(process.env.PORT ?? "8080", 10);
+app.listen(PORT, () => {
+  // Plain console.log here (not the structured logger) so Cloud Run sees the
+  // standard stdout line and the container is marked as serving immediately.
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "worker.listening", port: PORT }));
+});
