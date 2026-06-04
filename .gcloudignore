@@ -11,26 +11,29 @@ node_modules
 .env.local
 .env.*.local
 
-# Next.js app — not needed for the worker image
+# Next.js app — not needed for the worker image.
+# Patterns starting with / are anchored to the repo root so they don't
+# accidentally exclude worker/tsconfig.json or worker/README.md.
 app
 public
-postcss.config.mjs
-next.config.ts
-next-env.d.ts
-tsconfig.json
-tsconfig.tsbuildinfo
-eslint.config.mjs
+/postcss.config.mjs
+/next.config.ts
+/next-env.d.ts
+/tsconfig.json
+/tsconfig.tsbuildinfo
+/eslint.config.mjs
 
 # Docs and meta — not needed in image
 docs
 bugs-fixed
-FAANG-Analysis.txt
-README.md
-firestore.rules
-firestore.indexes.json
-storage.rules
-firebase.json
-vercel.json
+/FAANG-Analysis.txt
+/README.md
+/firestore.rules
+/firestore.indexes.json
+/storage.rules
+/firebase.json
+/vercel.json
 
 # Build caches
 *.log
+.env.cloudrun.yaml

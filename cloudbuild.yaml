@@ -1,0 +1,29 @@
+# Cloud Build config for the EigenWork Cloud Run worker.
+#
+# Lives at repo root because the Docker build context needs both
+# `worker/` (Dockerfile + index.ts) and `lib/` (shared with Next.js).
+# The Dockerfile itself is at worker/Dockerfile.
+#
+# Triggered via:
+#   gcloud builds submit --config cloudbuild.yaml
+#
+# Then deploy with:
+#   gcloud run deploy eigen-compute \
+#     --image us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/eigen-compute:latest \
+#     ...
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/eigen-compute:latest'
+      - '-f'
+      - 'worker/Dockerfile'
+      - '.'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/eigen-compute:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
