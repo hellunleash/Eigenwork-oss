@@ -11,6 +11,7 @@ import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { UserSidebar } from "./UserSidebar";
+import { FreeClaimGate } from "./FreeClaimGate";
 
 type Pipeline = {
   id: string;
@@ -40,6 +41,18 @@ export default function UserDashboardPage() {
   >([]);
   const [userName, setUserName] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && localStorage.getItem("ew_sidebar_collapsed") === "1") {
+      setSidebarCollapsed(true);
+    }
+  }, []);
+  const toggleSidebar = () =>
+    setSidebarCollapsed((c) => {
+      if (typeof window !== "undefined") localStorage.setItem("ew_sidebar_collapsed", c ? "0" : "1");
+      return !c;
+    });
 
   // Use the SWR-based dashboard data hook
   const { pipelines, entitlement, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
@@ -251,8 +264,14 @@ export default function UserDashboardPage() {
     );
   }
 
+  // New org with no active pass yet → gate the Free grant behind a
+  // fingerprint + reCAPTCHA check before showing the workspace.
+  if (!isLoading && entitlement && entitlement.plan === null) {
+    return <FreeClaimGate onClaimed={() => revalidate()} />;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 pl-60">
+    <div className={`min-h-screen bg-gray-50 transition-[padding] duration-200 ${sidebarCollapsed ? "pl-0" : "pl-60"}`}>
       <UserSidebar
         planLabel={planLabel}
         screensRemaining={screensRemaining}
@@ -264,7 +283,21 @@ export default function UserDashboardPage() {
         onLogout={handleLogout}
         userName={userName}
         userEmail={userEmail}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
       />
+      {sidebarCollapsed && (
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          title="Open sidebar"
+          className="fixed top-3 left-3 z-40 bg-white border border-gray-200 rounded-lg p-2 shadow-sm hover:bg-gray-50"
+        >
+          <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      )}
       <div className="border-b border-gray-200 bg-white">
         <div className="px-6 py-4">
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Dashboard</h1>

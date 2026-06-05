@@ -16,6 +16,8 @@ export function UserSidebar(props: {
   onLogout: () => void;
   userName: string | null;
   userEmail: string | null;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
   const {
     planLabel,
@@ -28,18 +30,34 @@ export function UserSidebar(props: {
     onLogout,
     userName,
     userEmail,
+    collapsed,
+    onToggle,
   } = props;
   const pathname = usePathname();
   const name = userName || userEmail || "Account";
   const initials = (userName || userEmail || "?").trim().slice(0, 2).toUpperCase();
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-60 border-r border-gray-200 bg-white flex flex-col z-30">
+    <aside
+      className={`fixed left-0 top-0 bottom-0 w-60 border-r border-gray-200 bg-white flex flex-col z-30 transition-transform duration-200 ${
+        collapsed ? "-translate-x-full" : "translate-x-0"
+      }`}
+    >
       {/* Brand */}
-      <div className="px-4 py-4">
+      <div className="px-4 py-4 flex items-center justify-between">
         <Link href="/user/dashboard" className="text-xl font-bold text-gray-900 tracking-tight">
           EigenWork
         </Link>
+        <button
+          type="button"
+          onClick={onToggle}
+          title="Collapse sidebar"
+          className="text-gray-400 hover:text-gray-700 p-1"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+        </button>
       </div>
 
       {/* Workspace switcher */}

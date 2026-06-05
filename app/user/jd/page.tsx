@@ -80,13 +80,37 @@ export default function JDInputPage() {
       style={{
         minHeight: "100vh",
         background: "#fafafa",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "40px 24px",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif",
       }}
     >
+      <nav
+        style={{
+          borderBottom: "1px solid #e5e7eb",
+          background: "white",
+          padding: "16px 24px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <a
+          href="/user/dashboard"
+          style={{ fontWeight: 700, fontSize: "20px", color: "#111827", textDecoration: "none", letterSpacing: "-0.025em" }}
+        >
+          EigenWork
+        </a>
+        <a href="/user/dashboard" style={{ fontSize: "14px", color: "#6b7280", textDecoration: "none" }}>
+          ← Dashboard
+        </a>
+      </nav>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "40px 24px",
+        }}
+      >
       <div
         style={{
           width: "100%",
@@ -179,6 +203,7 @@ export default function JDInputPage() {
         >
           {loading ? "Processing..." : "Continue"}
         </button>
+      </div>
       </div>
     </div>
   );
