@@ -9,6 +9,7 @@ import Script from "next/script";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { mutate as swrMutate } from "swr";
 import { auth } from "@/lib/firebase";
+import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 
@@ -55,6 +56,9 @@ export default function UserDashboardPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [paddleReady, setPaddleReady] = useState(false);
   const paddleInitRef = useRef(false);
+  const [orgs, setOrgs] = useState<
+    Array<{ orgId: string; name: string; plan: string | null; role: string | null; isActive: boolean }>
+  >([]);
 
   // Use the SWR-based dashboard data hook
   const { pipelines, entitlement, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
@@ -73,6 +77,44 @@ export default function UserDashboardPage() {
     });
     return () => unsub();
   }, [router]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    (async () => {
+      try {
+        const token = await getIdTokenOrNull();
+        const res = await fetch("/api/org/list", {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (active && Array.isArray(data.orgs)) setOrgs(data.orgs);
+      } catch {
+        /* non-fatal: the switcher just won't render */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+
+  const handleSwitchOrg = async (orgId: string) => {
+    try {
+      const token = await getIdTokenOrNull();
+      await fetch("/api/org/switch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ orgId }),
+      });
+      window.location.reload();
+    } catch {
+      /* ignore */
+    }
+  };
 
   const handlePaddleLoad = useCallback(() => {
     if (typeof window === "undefined" || !window.Paddle || paddleInitRef.current) return;
@@ -284,9 +326,31 @@ export default function UserDashboardPage() {
             EigenWork
           </h1>
           <div className="flex items-center gap-3 shrink-0">
+            {orgs.length > 1 && (
+              <select
+                value={entitlement?.orgId ?? ""}
+                onChange={(e) => handleSwitchOrg(e.target.value)}
+                className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium"
+                title="Switch workspace"
+              >
+                {orgs.map((o) => (
+                  <option key={o.orgId} value={o.orgId}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium">
               {planLabel} · {screensRemaining} screens
             </span>
+            {entitlement?.plan === "team" && (
+              <Link
+                href="/user/team"
+                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
+              >
+                Team
+              </Link>
+            )}
             <Link
               href="/pricing"
               className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"

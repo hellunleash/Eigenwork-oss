@@ -134,3 +134,58 @@ export async function requireOrgMember(headers: Headers): Promise<OrgContext> {
   const role = (await getOrgRole(orgId, userId)) ?? "owner";
   return { ok: true, userId, orgId, role };
 }
+
+/** Add a user to an org with a role, and record the org on their userOrgs. */
+export async function addMember(orgId: string, userId: string, role: OrgRole): Promise<void> {
+  const db = getAdminDb();
+  const batch = db.batch();
+  batch.set(
+    db.collection(ORGS_COLLECTION).doc(orgId).collection(MEMBERS_SUBCOLLECTION).doc(userId),
+    { role, joinedAt: FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+  batch.set(
+    db.collection(USER_ORGS_COLLECTION).doc(userId),
+    { orgIds: FieldValue.arrayUnion(orgId), updatedAt: FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+  await batch.commit();
+}
+
+/** Remove a user from an org. If it was their active org, fall back to any
+ *  remaining org (their personal org), else null. */
+export async function removeMember(orgId: string, userId: string): Promise<void> {
+  const db = getAdminDb();
+  const userOrgRef = db.collection(USER_ORGS_COLLECTION).doc(userId);
+  const memberRef = db
+    .collection(ORGS_COLLECTION)
+    .doc(orgId)
+    .collection(MEMBERS_SUBCOLLECTION)
+    .doc(userId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userOrgRef);
+    const data = snap.data();
+    const orgIds: string[] = Array.isArray(data?.orgIds)
+      ? (data!.orgIds as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    const remaining = orgIds.filter((x) => x !== orgId);
+    const update: Record<string, unknown> = {
+      orgIds: FieldValue.arrayRemove(orgId),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (data?.activeOrgId === orgId) {
+      update.activeOrgId = remaining[0] ?? null;
+    }
+    tx.set(userOrgRef, update, { merge: true });
+    tx.delete(memberRef);
+  });
+}
+
+/** Set a user's active org (the workspace the dashboard scopes to). */
+export async function setActiveOrg(userId: string, orgId: string): Promise<void> {
+  const db = getAdminDb();
+  await db
+    .collection(USER_ORGS_COLLECTION)
+    .doc(userId)
+    .set({ activeOrgId: orgId, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+}
