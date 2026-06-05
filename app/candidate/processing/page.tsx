@@ -4,40 +4,6 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePageTitle } from "@/lib/use-page-title";
 
-const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
-
-declare global {
-  interface Window {
-    grecaptcha?: {
-      ready: (cb: () => void) => void;
-      execute: (key: string, opts: { action: string }) => Promise<string>;
-    };
-  }
-}
-
-function loadRecaptchaScript(siteKey: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof document === "undefined") return resolve();
-    if (document.querySelector("script[data-recaptcha]")) return resolve();
-    const s = document.createElement("script");
-    s.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
-    s.setAttribute("data-recaptcha", "1");
-    s.onload = () => resolve();
-    s.onerror = () => resolve();
-    document.head.appendChild(s);
-  });
-}
-
-async function getRecaptchaToken(): Promise<string> {
-  if (!RECAPTCHA_SITE_KEY || typeof window === "undefined") return "";
-  await loadRecaptchaScript(RECAPTCHA_SITE_KEY);
-  return new Promise((resolve) => {
-    const g = window.grecaptcha;
-    if (!g) return resolve("");
-    g.ready(() => g.execute(RECAPTCHA_SITE_KEY!, { action: "apply" }).then(resolve).catch(() => resolve("")));
-  });
-}
-
 export default function ProcessingPage() {
   usePageTitle("Processing");
   const router = useRouter();
@@ -86,12 +52,11 @@ export default function ProcessingPage() {
           setStatus("Analyzing resume artifacts...");
         }
 
-        // 3. Generate a fresh reCAPTCHA token (no-op if not configured), then call backend.
-        const recaptchaToken = await getRecaptchaToken();
+        // 3. Call backend (turnstileToken is already in candidateData from the form).
         const response = await fetch('/api/candidate/evaluate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...candidateData, recaptchaToken }),
+          body: JSON.stringify(candidateData),
         });
 
         if (!response.ok) {

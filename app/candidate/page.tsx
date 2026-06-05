@@ -2,6 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { TurnstileWidget } from '../components/TurnstileWidget';
 
 type WorkType = 'Intern' | 'Full-time' | 'Contract';
 type LocationType = 'Remote' | 'Hybrid' | 'Onsite';
@@ -41,6 +42,7 @@ function CandidatePageContent() {
   const [errors, setErrors] = useState<string[]>([]);
   // Honeypot: real users never see or fill this; bots do, and get rejected.
   const [hpField, setHpField] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
 
   // JD-based lock: when jobId in URL, we fetch JD and lock work type + location to JD values from confirm page
   const [jdLoading, setJdLoading] = useState<boolean>(() => Boolean(jobIdFromUrl));
@@ -298,6 +300,7 @@ function CandidatePageContent() {
         githubUrl,
         projectLinks,
         website: hpField, // honeypot — server rejects if non-empty
+        turnstileToken, // Cloudflare Turnstile token (verified server-side)
         ...(jobIdFromUrl ? { jobId: jobIdFromUrl } : {}),
       };
       if (typeof window !== 'undefined') {
@@ -751,6 +754,9 @@ function CandidatePageContent() {
               </ul>
             </div>
           )}
+
+          {/* Bot challenge (Cloudflare Turnstile; renders nothing if not configured) */}
+          <TurnstileWidget onToken={setTurnstileToken} className="pt-2" />
 
           {/* Submit Button */}
           <div className="pt-4">

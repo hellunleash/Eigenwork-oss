@@ -1,52 +1,30 @@
 "use client";
 
-import Script from "next/script";
 import { useState } from "react";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { getDeviceFingerprint } from "@/lib/fingerprint";
-
-const SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
-
-declare global {
-  interface Window {
-    grecaptcha?: {
-      ready: (cb: () => void) => void;
-      execute: (key: string, opts: { action: string }) => Promise<string>;
-    };
-  }
-}
+import { TurnstileWidget } from "../../components/TurnstileWidget";
 
 /**
  * Shown when a freshly-provisioned org has no active pass. Claims the Free
- * pass (100 screens) after a device-fingerprint + reCAPTCHA check. Degrades
- * gracefully: if NEXT_PUBLIC_RECAPTCHA_SITE_KEY is unset, it runs
- * fingerprint-only.
+ * pass (100 screens) after a device-fingerprint + Cloudflare Turnstile check.
+ * Degrades gracefully: if NEXT_PUBLIC_TURNSTILE_SITE_KEY is unset, the widget
+ * renders nothing and it runs fingerprint-only.
  */
 export function FreeClaimGate({ onClaimed }: { onClaimed: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const getRecaptchaToken = (): Promise<string> =>
-    new Promise((resolve) => {
-      if (!SITE_KEY || !window.grecaptcha) return resolve("");
-      window.grecaptcha.ready(() => {
-        window.grecaptcha!.execute(SITE_KEY, { action: "claim_free" }).then(resolve).catch(() => resolve(""));
-      });
-    });
+  const [turnstileToken, setTurnstileToken] = useState("");
 
   const claim = async () => {
     setBusy(true);
     setError(null);
     try {
-      const [fingerprint, recaptchaToken, token] = await Promise.all([
-        getDeviceFingerprint(),
-        getRecaptchaToken(),
-        getIdTokenOrNull(),
-      ]);
+      const [fingerprint, token] = await Promise.all([getDeviceFingerprint(), getIdTokenOrNull()]);
       const res = await fetch("/api/free/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ recaptchaToken, fingerprint }),
+        body: JSON.stringify({ turnstileToken, fingerprint }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.ok) return onClaimed();
@@ -66,9 +44,6 @@ export function FreeClaimGate({ onClaimed }: { onClaimed: () => void }) {
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-      {SITE_KEY && (
-        <Script src={`https://www.google.com/recaptcha/api.js?render=${SITE_KEY}`} strategy="lazyOnload" />
-      )}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm max-w-md w-full p-8 text-center">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Start free</h1>
         <p className="text-sm text-gray-600 mb-6">
@@ -80,6 +55,9 @@ export function FreeClaimGate({ onClaimed }: { onClaimed: () => void }) {
             {error}
           </div>
         )}
+        <div className="flex justify-center mb-4">
+          <TurnstileWidget onToken={setTurnstileToken} />
+        </div>
         <button
           type="button"
           onClick={claim}
@@ -88,7 +66,6 @@ export function FreeClaimGate({ onClaimed }: { onClaimed: () => void }) {
         >
           {busy ? "Verifying…" : "Claim 100 free screens"}
         </button>
-        {SITE_KEY && <p className="text-[11px] text-gray-400 mt-4">Protected by reCAPTCHA.</p>}
       </div>
     </div>
   );

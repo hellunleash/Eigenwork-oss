@@ -4,7 +4,7 @@ import { getAdminDb, FieldValue, adminStorageUpload } from "@/lib/firebase-admin
 import { allowRequest } from "@/lib/rate-limit";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
 import { canEvaluate } from "@/lib/entitlements";
-import { verifyRecaptcha } from "@/lib/recaptcha";
+import { verifyTurnstile } from "@/lib/turnstile";
 
 
 // Junior path can spend 35-60s in Doc AI + GitHub + 2 LLM calls. 60s left no
@@ -77,11 +77,11 @@ export async function POST(req: NextRequest) {
       log("warn", "candidate.honeypot_tripped", { requestId, route, jobId: typeof jobId === "string" ? jobId : undefined });
       return NextResponse.json({ error: "rejected" }, { status: 400 });
     }
-    // reCAPTCHA v3 — conservative threshold to avoid false-positives on real
-    // applicants; skipped entirely if RECAPTCHA_SECRET is unset.
-    const recaptchaToken = typeof body.recaptchaToken === "string" ? body.recaptchaToken : "";
-    if (!(await verifyRecaptcha(recaptchaToken, 0.3))) {
-      log("warn", "candidate.recaptcha_failed", { requestId, route, jobId: typeof jobId === "string" ? jobId : undefined });
+    // Cloudflare Turnstile — bot challenge; skipped entirely if TURNSTILE_SECRET
+    // is unset (honeypot above still applies).
+    const turnstileToken = typeof body.turnstileToken === "string" ? body.turnstileToken : "";
+    if (!(await verifyTurnstile(turnstileToken))) {
+      log("warn", "candidate.turnstile_failed", { requestId, route, jobId: typeof jobId === "string" ? jobId : undefined });
       return NextResponse.json(
         { error: "verification_failed", message: "We couldn't verify your submission. Please refresh and try again." },
         { status: 403 }

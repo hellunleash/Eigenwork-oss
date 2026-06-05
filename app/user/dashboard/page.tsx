@@ -265,7 +265,7 @@ export default function UserDashboardPage() {
   }
 
   // New org with no active pass yet → gate the Free grant behind a
-  // fingerprint + reCAPTCHA check before showing the workspace.
+  // fingerprint + Turnstile check before showing the workspace.
   if (!isLoading && entitlement && entitlement.plan === null) {
     return <FreeClaimGate onClaimed={() => revalidate()} />;
   }

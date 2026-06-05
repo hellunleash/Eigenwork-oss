@@ -56,7 +56,7 @@ export async function ensurePersonalOrg(userId: string): Promise<string> {
 
     const orgId = newOrgRef.id;
     // NB: the Free pass is NOT granted here. It is claimed via /api/free/claim
-    // after a device-fingerprint + reCAPTCHA check (free-tier abuse guard). A
+    // after a device-fingerprint + Turnstile check (free-tier abuse guard). A
     // freshly provisioned org therefore has no active pass until claimed.
     tx.set(newOrgRef, {
       name: "My Workspace",
