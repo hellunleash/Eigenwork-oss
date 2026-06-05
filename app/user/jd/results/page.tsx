@@ -259,6 +259,11 @@ function NewIntakeModal({
   );
 }
 
+function csvCell(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 function JDResultsContent() {
   usePageTitle("Top Candidates");
   const router = useRouter();
@@ -294,6 +299,37 @@ function JDResultsContent() {
       setIsSubmitting(false);
     }
   }, [jobId, isSubmitting, router]);
+
+  const exportCsv = () => {
+    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Role Fit"];
+    const rows = top10.map((c, i) => {
+      const wt = c.matchData?.workTypes;
+      const workTypes = Array.isArray(wt) ? wt.join("; ") : wt != null ? String(wt) : "";
+      return [
+        String(i + 1),
+        c.candidateName ?? "",
+        c.email ?? "",
+        c.phone != null ? String(c.phone) : "",
+        String(c.score ?? ""),
+        getTrustLabel(c.score).text,
+        (c.matchData?.locations ?? []).join("; "),
+        workTypes,
+        (c.matchData?.work_auth ?? "").trim(),
+        getRoleFitOneLiner(c),
+      ];
+    });
+    const csv = [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+    // Prepend a BOM so Excel reads UTF-8 correctly.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `eigenwork-top-candidates-${jobId ?? "pipeline"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   if (!jobId) {
     return (
@@ -350,7 +386,18 @@ function JDResultsContent() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <ResultsNavBar />
       <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-8 sm:px-6">
-        <h1 className="text-xl font-semibold text-gray-900 mb-6">Pipeline Results</h1>
+        <div className="flex items-center justify-between mb-6 gap-3">
+          <h1 className="text-xl font-semibold text-gray-900">Pipeline Results</h1>
+          {top10.length > 0 && (
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 shrink-0"
+            >
+              Export CSV
+            </button>
+          )}
+        </div>
         <EtiPoolDistributionBar distribution={etiDistribution} />
         {weakPool.weak && !bannerDismissed && (
           <WeakPoolBanner
