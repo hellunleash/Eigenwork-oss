@@ -2,9 +2,8 @@
 
 export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Script from "next/script";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { mutate as swrMutate } from "swr";
 import { auth } from "@/lib/firebase";
@@ -12,21 +11,6 @@ import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { UserSidebar } from "./UserSidebar";
-
-declare global {
-  interface Window {
-    Paddle?: {
-      Environment: { set: (env: string) => void };
-      Initialize: (opts: { token: string }) => void;
-      Checkout: {
-        open: (opts: {
-          items: Array<{ priceId: string; quantity: number }>;
-          customData?: Record<string, string>;
-        }) => void;
-      };
-    };
-  }
-}
 
 type Pipeline = {
   id: string;
@@ -43,9 +27,6 @@ export default function UserDashboardPage() {
   const router = useRouter();
   const [authChecking, setAuthChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const [creditsModal, setCreditsModal] = useState(false);
-  const [creditsQuantity, setCreditsQuantity] = useState(10);
-  const [creditsLoading, setCreditsLoading] = useState(false);
   const [generateModal, setGenerateModal] = useState<Pipeline | null>(null);
   const [generateLoading, setGenerateLoading] = useState(false);
   // Elapsed seconds since the match request started, surfaced in the modal so
@@ -54,8 +35,6 @@ export default function UserDashboardPage() {
   const [generateElapsed, setGenerateElapsed] = useState(0);
   const [deleteModal, setDeleteModal] = useState<Pipeline | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [paddleReady, setPaddleReady] = useState(false);
-  const paddleInitRef = useRef(false);
   const [orgs, setOrgs] = useState<
     Array<{ orgId: string; name: string; plan: string | null; role: string | null; isActive: boolean }>
   >([]);
@@ -117,51 +96,6 @@ export default function UserDashboardPage() {
       window.location.reload();
     } catch {
       /* ignore */
-    }
-  };
-
-  const handlePaddleLoad = useCallback(() => {
-    if (typeof window === "undefined" || !window.Paddle || paddleInitRef.current) return;
-    const token = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
-    if (!token) {
-      console.error("NEXT_PUBLIC_PADDLE_CLIENT_TOKEN is not set");
-      return;
-    }
-    paddleInitRef.current = true;
-    window.Paddle.Environment.set("production");
-    window.Paddle.Initialize({ token });
-    setPaddleReady(true);
-  }, []);
-
-  const handleCheckout = async (
-    kind: "single_role" | "team" | "wallet_topup",
-    quantity = 1
-  ) => {
-    if (!window.Paddle?.Checkout) {
-      alert("Checkout is loading. Please try again in a moment.");
-      return;
-    }
-    const orgId = entitlement?.orgId;
-    if (!orgId) {
-      alert("Workspace isn't ready yet — refresh and try again.");
-      return;
-    }
-    setCreditsLoading(true);
-    try {
-      const res = await fetch("/api/paddle/config");
-      if (!res.ok) throw new Error("Failed to load checkout config");
-      const cfg = (await res.json()) as { prices?: Record<string, string | null> };
-      const priceId = cfg.prices?.[kind];
-      if (!priceId) throw new Error("This product isn't available yet.");
-      window.Paddle.Checkout.open({
-        items: [{ priceId, quantity: Math.max(1, Math.floor(quantity)) }],
-        customData: { orgId, kind },
-      });
-      setCreditsModal(false);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Checkout failed");
-    } finally {
-      setCreditsLoading(false);
     }
   };
 
@@ -319,11 +253,6 @@ export default function UserDashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 pl-60">
-      <Script
-        src="https://cdn.paddle.com/paddle/v2/paddle.js"
-        strategy="lazyOnload"
-        onLoad={handlePaddleLoad}
-      />
       <UserSidebar
         planLabel={planLabel}
         screensRemaining={screensRemaining}
@@ -331,7 +260,7 @@ export default function UserDashboardPage() {
         orgs={orgs}
         activeOrgId={entitlement?.orgId ?? null}
         onSwitchOrg={handleSwitchOrg}
-        onBuy={() => setCreditsModal(true)}
+        onBuy={() => router.push("/user/billing")}
         onLogout={handleLogout}
         userName={userName}
         userEmail={userEmail}
@@ -358,7 +287,7 @@ export default function UserDashboardPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setCreditsModal(true)}
+                onClick={() => router.push("/user/billing")}
                 className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors shrink-0"
               >
                 Add Screens
@@ -554,95 +483,6 @@ export default function UserDashboardPage() {
                 className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
               >
                 {generateLoading ? "Generating…" : "Continue"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Buy EigenCredits modal */}
-      {creditsModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => !creditsLoading && setCreditsModal(false)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold text-gray-900 mb-1">Buy or upgrade</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              One-time purchases. A new plan replaces your current one; Screen Wallet top-ups stack on top and are used after your plan&apos;s screens run out.
-            </p>
-
-            <div className="space-y-3">
-              {/* Single Role */}
-              <div className="border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-gray-900">Single Role — $149</p>
-                  <p className="text-xs text-gray-500">1 role · 1,500 screens · 60 days</p>
-                </div>
-                <button
-                  type="button"
-                  disabled={creditsLoading}
-                  onClick={() => handleCheckout("single_role")}
-                  className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 shrink-0"
-                >
-                  Buy
-                </button>
-              </div>
-
-              {/* Team */}
-              <div className="border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-gray-900">Team — $699</p>
-                  <p className="text-xs text-gray-500">10 roles · 15,000 screens · 6 months · ATS</p>
-                </div>
-                <button
-                  type="button"
-                  disabled={creditsLoading}
-                  onClick={() => handleCheckout("team")}
-                  className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 shrink-0"
-                >
-                  Buy
-                </button>
-              </div>
-
-              {/* Screen Wallet top-up */}
-              <div className="border border-gray-200 rounded-lg p-3">
-                <p className="font-semibold text-gray-900">Screen Wallet — $0.15/screen</p>
-                <p className="text-xs text-gray-500 mb-2">Top up overage screens; used after your plan bucket runs out.</p>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    value={creditsQuantity}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10);
-                      setCreditsQuantity(Number.isInteger(v) && v >= 1 ? v : 1);
-                    }}
-                    className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                  />
-                  <button
-                    type="button"
-                    disabled={creditsLoading}
-                    onClick={() => handleCheckout("wallet_topup", creditsQuantity)}
-                    className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
-                  >
-                    {creditsLoading ? "…" : `Top up ${creditsQuantity}`}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end mt-4">
-              <button
-                type="button"
-                disabled={creditsLoading}
-                onClick={() => setCreditsModal(false)}
-                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium disabled:opacity-50"
-              >
-                Close
               </button>
             </div>
           </div>
