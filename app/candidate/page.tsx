@@ -39,6 +39,8 @@ function CandidatePageContent() {
   const [projectLinks, setProjectLinks] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  // Honeypot: real users never see or fill this; bots do, and get rejected.
+  const [hpField, setHpField] = useState('');
 
   // JD-based lock: when jobId in URL, we fetch JD and lock work type + location to JD values from confirm page
   const [jdLoading, setJdLoading] = useState<boolean>(() => Boolean(jobIdFromUrl));
@@ -295,6 +297,7 @@ function CandidatePageContent() {
         resumeBase64, // <--- NOW WE HAVE THE FILE DATA
         githubUrl,
         projectLinks,
+        website: hpField, // honeypot — server rejects if non-empty
         ...(jobIdFromUrl ? { jobId: jobIdFromUrl } : {}),
       };
       if (typeof window !== 'undefined') {
@@ -382,6 +385,17 @@ function CandidatePageContent() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-12">
+          {/* Honeypot — visually hidden; bots fill it and are rejected server-side. */}
+          <input
+            type="text"
+            name="website"
+            value={hpField}
+            onChange={(e) => setHpField(e.target.value)}
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+            style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', opacity: 0 }}
+          />
           {/* Identity */}
           <div className="space-y-6">
             <h2 className="text-base font-semibold text-gray-900 mb-4">

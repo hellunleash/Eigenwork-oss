@@ -4,6 +4,7 @@ import { getAdminDb, FieldValue, adminStorageUpload } from "@/lib/firebase-admin
 import { allowRequest } from "@/lib/rate-limit";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
 import { canEvaluate } from "@/lib/entitlements";
+import { verifyRecaptcha } from "@/lib/recaptcha";
 
 
 // Junior path can spend 35-60s in Doc AI + GitHub + 2 LLM calls. 60s left no
@@ -69,6 +70,23 @@ export async function POST(req: NextRequest) {
       projectLinks,
       jobId
     } = body;
+
+    // ---- Bot guards: reject before any screen-consuming work ----
+    // Honeypot: a hidden form field real applicants never fill.
+    if (typeof body.website === "string" && body.website.trim() !== "") {
+      log("warn", "candidate.honeypot_tripped", { requestId, route, jobId: typeof jobId === "string" ? jobId : undefined });
+      return NextResponse.json({ error: "rejected" }, { status: 400 });
+    }
+    // reCAPTCHA v3 — conservative threshold to avoid false-positives on real
+    // applicants; skipped entirely if RECAPTCHA_SECRET is unset.
+    const recaptchaToken = typeof body.recaptchaToken === "string" ? body.recaptchaToken : "";
+    if (!(await verifyRecaptcha(recaptchaToken, 0.3))) {
+      log("warn", "candidate.recaptcha_failed", { requestId, route, jobId: typeof jobId === "string" ? jobId : undefined });
+      return NextResponse.json(
+        { error: "verification_failed", message: "We couldn't verify your submission. Please refresh and try again." },
+        { status: 403 }
+      );
+    }
 
     const cleanBase64 = resumeBase64 ? String(resumeBase64).replace(/^data:(.*?);base64,/, "") : null;
     if (!cleanBase64) {
