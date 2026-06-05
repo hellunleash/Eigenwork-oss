@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, adminStorageDelete } from "@/lib/firebase-admin";
 import { getUserProfile } from "@/lib/user-credits";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
@@ -96,8 +96,8 @@ export async function DELETE(_req: Request, context: RouteContext) {
   const requestId = getRequestId(_req.headers);
   const route = "/api/jd/[jobId]";
   try {
-    const auth = await requireFirebaseUser(_req.headers);
-    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const ctx = await requireOrgMember(_req.headers);
+    if (!ctx.ok) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
 
     const { jobId } = await context.params;
     if (!jobId) {
@@ -105,8 +105,8 @@ export async function DELETE(_req: Request, context: RouteContext) {
     }
     const db = getAdminDb();
     const jobSnap = await db.collection("jds").doc(jobId).get();
-    const owner = jobSnap.data()?.userId;
-    if (!owner || owner !== auth.userId) {
+    const ownerOrg = jobSnap.data()?.orgId;
+    if (!ownerOrg || ownerOrg !== ctx.orgId) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 

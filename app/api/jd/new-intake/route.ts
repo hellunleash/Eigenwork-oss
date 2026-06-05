@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { applyCreditMutation, makeOpId } from "@/lib/credit-ledger";
 import { getRequestId, log } from "@/lib/server-logger";
 
@@ -17,8 +17,8 @@ export async function POST(req: Request) {
   const requestId = getRequestId(req.headers);
   const route = "/api/jd/new-intake";
   try {
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const ctx = await requireOrgMember(req.headers);
+    if (!ctx.ok) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
 
     const body = await req.json().catch(() => ({}));
     const jobId = body.jobId;
@@ -32,10 +32,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
     const jobData = jobSnap.data();
-    const userId = typeof jobData?.userId === "string" ? jobData.userId : null;
-    if (!userId || userId !== auth.userId) {
+    const ownerOrg = typeof jobData?.orgId === "string" ? jobData.orgId : null;
+    if (!ownerOrg || ownerOrg !== ctx.orgId) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
+    // Owner userId is still used for the (deferred) Weak-Pool credit restore;
+    // Phase 2 moves this to the org-scoped screen wallet.
+    const userId = typeof jobData?.userId === "string" ? jobData.userId : null;
 
     const candSnap = await db
       .collection("candidates")

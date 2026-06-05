@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getAdminDb, FieldValue, freshResumeUrl } from "@/lib/firebase-admin";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import { buildEtiDistributionFromScores, type EtiDistribution } from "@/lib/eti-distribution";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import {
   getRoleFitCachedLabelsBatch,
   setRoleFitCachedLabelsBatch,
@@ -519,7 +519,7 @@ type CandidateDoc = {
 
 async function runMatch(
   jdId: string,
-  requesterUserId: string,
+  requesterOrgId: string,
   ctx: LogContext
 ): Promise<{ success: boolean; top10?: unknown[]; etiDistribution?: EtiDistribution; seniority?: string; error?: string }> {
   const tRun = timeMs();
@@ -529,8 +529,8 @@ async function runMatch(
     return { success: false, error: "Job not found" };
   }
   const jd = { id: snap.id, ...snap.data() } as Record<string, unknown>;
-  const owner = typeof jd.userId === "string" ? jd.userId : null;
-  if (!owner || owner !== requesterUserId) {
+  const ownerOrg = typeof jd.orgId === "string" ? jd.orgId : null;
+  if (!ownerOrg || ownerOrg !== requesterOrgId) {
     return { success: false, error: "Forbidden" };
   }
 
@@ -721,8 +721,8 @@ export async function GET(req: Request) {
   const requestId = getRequestId(req.headers);
   const route = "/api/jd/match";
   try {
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    const member = await requireOrgMember(req.headers);
+    if (!member.ok) return NextResponse.json({ success: false, error: member.error }, { status: member.status });
 
     const url = new URL(req.url);
     const jobId = url.searchParams.get("jobId");
@@ -730,13 +730,13 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: "jobId required" }, { status: 400 });
     }
     const t = timeMs();
-    const ctx: LogContext = { requestId, route, userId: auth.userId, jobId };
-    const result = await runMatch(jobId, auth.userId, ctx);
+    const ctx: LogContext = { requestId, route, userId: member.userId, jobId };
+    const result = await runMatch(jobId, member.orgId, ctx);
     if (!result.success && result.error) {
       const status = result.error === "Job not found" ? 404 : result.error === "Forbidden" ? 403 : 400;
       return NextResponse.json({ success: false, error: result.error }, { status });
     }
-    log("info", "jd.match_ok", { requestId, route, jobId, userId: auth.userId, latencyMs: t() });
+    log("info", "jd.match_ok", { requestId, route, jobId, userId: member.userId, latencyMs: t() });
     return NextResponse.json({
       success: true,
       top10: result.top10 ?? [],
@@ -757,8 +757,8 @@ export async function POST(req: Request) {
   const requestId = getRequestId(req.headers);
   const route = "/api/jd/match";
   try {
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    const member = await requireOrgMember(req.headers);
+    if (!member.ok) return NextResponse.json({ success: false, error: member.error }, { status: member.status });
 
     const body = await req.json().catch(() => ({}));
     const jdId = body.jobId ?? body.jdId;
@@ -766,13 +766,13 @@ export async function POST(req: Request) {
 
     if (jdId) {
       const t = timeMs();
-      const ctx: LogContext = { requestId, route, userId: auth.userId, jobId: String(jdId) };
-      const result = await runMatch(String(jdId), auth.userId, ctx);
+      const ctx: LogContext = { requestId, route, userId: member.userId, jobId: String(jdId) };
+      const result = await runMatch(String(jdId), member.orgId, ctx);
       if (!result.success && result.error) {
         const status = result.error === "Job not found" ? 404 : result.error === "Forbidden" ? 403 : 400;
         return NextResponse.json({ success: false, error: result.error }, { status });
       }
-      log("info", "jd.match_ok", { requestId, route, jobId: String(jdId), userId: auth.userId, latencyMs: t() });
+      log("info", "jd.match_ok", { requestId, route, jobId: String(jdId), userId: member.userId, latencyMs: t() });
       return NextResponse.json({
         success: true,
         top10: result.top10 ?? [],

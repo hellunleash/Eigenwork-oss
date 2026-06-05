@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, freshResumeUrl } from "@/lib/firebase-admin";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
 /**
@@ -33,8 +33,8 @@ export async function GET(req: Request, context: RouteContext) {
       return NextResponse.json({ error: "id required" }, { status: 400 });
     }
 
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) {
+    const ctx = await requireOrgMember(req.headers);
+    if (!ctx.ok) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -58,8 +58,8 @@ export async function GET(req: Request, context: RouteContext) {
     }
 
     const jdSnap = await db.collection("jds").doc(candidateJobId).get();
-    const jdOwner = jdSnap.exists ? (jdSnap.data()?.userId as string | undefined) : undefined;
-    if (!jdOwner || jdOwner !== auth.userId) {
+    const jdOwnerOrg = jdSnap.exists ? (jdSnap.data()?.orgId as string | undefined) : undefined;
+    if (!jdOwnerOrg || jdOwnerOrg !== ctx.orgId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 

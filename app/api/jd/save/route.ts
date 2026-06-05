@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
 /**
@@ -12,8 +12,8 @@ export async function POST(req: Request) {
   const requestId = getRequestId(req.headers);
   const route = "/api/jd/save";
   try {
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const ctx = await requireOrgMember(req.headers);
+    if (!ctx.ok) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
 
     const body = await req.json();
 
@@ -62,7 +62,11 @@ export async function POST(req: Request) {
       },
       submissionCap: cap,
       ...(roleFitDoc ? { role_fit: roleFitDoc } : {}),
-      userId: auth.userId,
+      userId: ctx.userId,
+      // ADR-002: orgId is the new owning key. Written alongside userId during
+      // the transition so existing userId-scoped reads keep working until the
+      // read paths are migrated to orgId.
+      orgId: ctx.orgId,
     };
 
     const db = getAdminDb();
@@ -71,7 +75,7 @@ export async function POST(req: Request) {
       // Authorization: only owner can update
       const existing = await db.collection("jds").doc(existingJobId).get();
       const existingUserId = existing.data()?.userId;
-      if (existingUserId && existingUserId !== auth.userId) {
+      if (existingUserId && existingUserId !== ctx.userId) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
       await db.collection("jds").doc(existingJobId).update(payload);

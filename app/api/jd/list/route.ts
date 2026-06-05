@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
 /**
@@ -11,12 +11,11 @@ export async function GET(req: NextRequest) {
   const requestId = getRequestId(req.headers);
   const route = "/api/jd/list";
   try {
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) return NextResponse.json({ error: auth.error, pipelines: [] }, { status: auth.status });
-    const uid = auth.userId;
+    const ctx = await requireOrgMember(req.headers);
+    if (!ctx.ok) return NextResponse.json({ error: ctx.error, pipelines: [] }, { status: ctx.status });
     const db = getAdminDb();
 
-    const jdsSnap = await db.collection("jds").where("userId", "==", uid).get();
+    const jdsSnap = await db.collection("jds").where("orgId", "==", ctx.orgId).get();
     const pipelines = await Promise.all(
       jdsSnap.docs.map(async (d) => {
         const data = d.data();

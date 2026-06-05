@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { getAdminDb, freshResumeUrl, adminStorageDelete } from "@/lib/firebase-admin";
-import { requireFirebaseUser } from "@/lib/auth-server";
+import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
 /**
@@ -66,8 +66,8 @@ export async function GET(req: Request, context: RouteContext) {
     // --- Mode 1: owner (Firebase auth on the JD the candidate applied to) -----
     const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
     if (authHeader) {
-      const auth = await requireFirebaseUser(req.headers);
-      if (!auth.ok) {
+      const ctx = await requireOrgMember(req.headers);
+      if (!ctx.ok) {
         return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
       }
 
@@ -81,8 +81,8 @@ export async function GET(req: Request, context: RouteContext) {
       }
 
       const jdSnap = await db.collection("jds").doc(candidateJobId).get();
-      const jdOwner = jdSnap.exists ? (jdSnap.data()?.userId as string | undefined) : undefined;
-      if (!jdOwner || jdOwner !== auth.userId) {
+      const jdOwnerOrg = jdSnap.exists ? (jdSnap.data()?.orgId as string | undefined) : undefined;
+      if (!jdOwnerOrg || jdOwnerOrg !== ctx.orgId) {
         return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
       }
 
@@ -159,8 +159,8 @@ export async function DELETE(req: Request, context: RouteContext) {
       return NextResponse.json({ error: "id required" }, { status: 400 });
     }
 
-    const auth = await requireFirebaseUser(req.headers);
-    if (!auth.ok) {
+    const ctx = await requireOrgMember(req.headers);
+    if (!ctx.ok) {
       return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
     }
 
@@ -186,8 +186,8 @@ export async function DELETE(req: Request, context: RouteContext) {
     }
 
     const jdSnap = await db.collection("jds").doc(candidateJobId).get();
-    const jdOwner = jdSnap.exists ? (jdSnap.data()?.userId as string | undefined) : undefined;
-    if (!jdOwner || jdOwner !== auth.userId) {
+    const jdOwnerOrg = jdSnap.exists ? (jdSnap.data()?.orgId as string | undefined) : undefined;
+    if (!jdOwnerOrg || jdOwnerOrg !== ctx.orgId) {
       return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
     }
 
@@ -216,7 +216,7 @@ export async function DELETE(req: Request, context: RouteContext) {
       route,
       candidateId: id,
       jobId: candidateJobId,
-      userId: auth.userId,
+      userId: ctx.userId,
     });
     return NextResponse.json({ success: true });
   } catch (err) {
