@@ -18,7 +18,7 @@ export interface PassSpec {
 
 export const PASS_SPEC: Record<PassKind, PassSpec> = {
   free: { screenCap: 100, roleLimit: 1, atsEnabled: false, validityDays: null },
-  single_role: { screenCap: 1000, roleLimit: 1, atsEnabled: false, validityDays: 60 },
+  single_role: { screenCap: 1500, roleLimit: 1, atsEnabled: false, validityDays: 60 },
   team: { screenCap: 15000, roleLimit: 10, atsEnabled: true, validityDays: 180 },
 };
 

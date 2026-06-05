@@ -14,8 +14,16 @@ type Pipeline = {
   hasMatchResult?: boolean;
 };
 
-type UserProfile = {
-  eigenCredits: number;
+type Entitlement = {
+  orgId: string | null;
+  plan: "free" | "single_role" | "team" | null;
+  screenCap: number;
+  screensUsed: number;
+  screensRemaining: number;
+  walletBalance: number;
+  expiresAtMs: number | null;
+  atsEnabled: boolean;
+  roleLimit: number;
 };
 
 async function authedFetch(url: string): Promise<unknown> {
@@ -77,7 +85,7 @@ export function useDashboardData(userId: string | null) {
     isLoading: userLoading,
     isValidating: userValidating,
     mutate: mutateUser,
-  } = useSWR<UserProfile>(
+  } = useSWR<Entitlement>(
     userId ? `/api/user/me` : null,
     fetcher,
     {
@@ -112,8 +120,8 @@ export function useDashboardData(userId: string | null) {
     ? pipelinesData
     : (pipelinesData && 'pipelines' in pipelinesData ? pipelinesData.pipelines : []);
   
-  // Preserve previous eigenCredits value - SWR keeps previous data during revalidation
-  const eigenCredits = userData?.eigenCredits ?? 0;
+  // Preserve previous entitlement value - SWR keeps previous data during revalidation
+  const entitlement = userData ?? null;
 
   // Determine loading state (only true if we have no cached data and are loading)
   // isValidating means revalidating in background, which shouldn't show loading spinner
@@ -132,7 +140,7 @@ export function useDashboardData(userId: string | null) {
 
   return {
     pipelines,
-    eigenCredits,
+    entitlement,
     isLoading,
     isValidating, // True when revalidating in background (has cached data)
     error: error ? (error instanceof Error ? error.message : 'Failed to load dashboard data') : null,

@@ -57,7 +57,10 @@ export default function UserDashboardPage() {
   const paddleInitRef = useRef(false);
 
   // Use the SWR-based dashboard data hook
-  const { pipelines, eigenCredits, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
+  const { pipelines, entitlement, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
+  const screensRemaining = entitlement?.screensRemaining ?? 0;
+  const planLabel =
+    entitlement?.plan === "team" ? "Team" : entitlement?.plan === "single_role" ? "Single Role" : "Free";
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -84,23 +87,29 @@ export default function UserDashboardPage() {
     setPaddleReady(true);
   }, []);
 
-  const handleBuyCreditsProceed = async () => {
-    const user = auth.currentUser;
-    if (!user) return alert("Please sign in.");
+  const handleCheckout = async (
+    kind: "single_role" | "team" | "wallet_topup",
+    quantity = 1
+  ) => {
     if (!window.Paddle?.Checkout) {
       alert("Checkout is loading. Please try again in a moment.");
       return;
     }
-    const qty = Math.max(1, Math.floor(creditsQuantity));
+    const orgId = entitlement?.orgId;
+    if (!orgId) {
+      alert("Workspace isn't ready yet — refresh and try again.");
+      return;
+    }
     setCreditsLoading(true);
     try {
       const res = await fetch("/api/paddle/config");
       if (!res.ok) throw new Error("Failed to load checkout config");
-      const { priceId } = await res.json();
-      if (!priceId || typeof priceId !== "string") throw new Error("Price not configured");
+      const cfg = (await res.json()) as { prices?: Record<string, string | null> };
+      const priceId = cfg.prices?.[kind];
+      if (!priceId) throw new Error("This product isn't available yet.");
       window.Paddle.Checkout.open({
-        items: [{ priceId, quantity: qty }],
-        customData: { userId: user.uid },
+        items: [{ priceId, quantity: Math.max(1, Math.floor(quantity)) }],
+        customData: { orgId, kind },
       });
       setCreditsModal(false);
     } catch (e) {
@@ -247,7 +256,7 @@ export default function UserDashboardPage() {
   }
 
   // Only show error if we have no cached data to display
-  if (error && pipelines.length === 0 && eigenCredits === 0) {
+  if (error && pipelines.length === 0 && screensRemaining === 0) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
         <p className="text-red-600 text-sm mb-4">{error}</p>
@@ -276,7 +285,7 @@ export default function UserDashboardPage() {
           </h1>
           <div className="flex items-center gap-3 shrink-0">
             <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium">
-              EigenCredits: {eigenCredits}
+              {planLabel} · {screensRemaining} screens
             </span>
             <Link
               href="/pricing"
@@ -289,7 +298,7 @@ export default function UserDashboardPage() {
               onClick={() => setCreditsModal(true)}
               className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
             >
-              Buy EigenCredits
+              Buy / Upgrade
             </button>
             <button
               type="button"
@@ -302,8 +311,8 @@ export default function UserDashboardPage() {
         </div>
       </div>
 
-      {/* EigenCredits warning banner */}
-      {eigenCredits === 0 && pipelines.length > 0 && (
+      {/* No-screens warning banner */}
+      {screensRemaining === 0 && pipelines.length > 0 && (
         <div className="bg-amber-50 border-b border-amber-200">
           <div className="max-w-3xl mx-auto px-4 py-3 sm:px-6">
             <div className="flex items-start gap-3">
@@ -313,7 +322,7 @@ export default function UserDashboardPage() {
                   Your intake links are paused
                 </p>
                 <p className="text-sm text-amber-700 mt-0.5">
-                  Add EigenCredits to resume accepting candidate applications. Your intake links remain valid and will automatically reactivate when you add credits.
+                  Add screens to resume accepting candidate applications. Your intake links remain valid and will automatically reactivate when you add screens.
                 </p>
               </div>
               <button
@@ -321,7 +330,7 @@ export default function UserDashboardPage() {
                 onClick={() => setCreditsModal(true)}
                 className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors shrink-0"
               >
-                Add Credits
+                Add Screens
               </button>
             </div>
           </div>
@@ -423,11 +432,11 @@ export default function UserDashboardPage() {
                     </button>
                     <button
                       type="button"
-                      disabled={eigenCredits <= 0}
-                      title={eigenCredits <= 0 ? "Add EigenCredits to copy intake link" : undefined}
-                      onClick={() => eigenCredits > 0 && handleCopyIntakeLink(p.id)}
+                      disabled={screensRemaining <= 0}
+                      title={screensRemaining <= 0 ? "Add screens to copy intake link" : undefined}
+                      onClick={() => screensRemaining > 0 && handleCopyIntakeLink(p.id)}
                       className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                        eigenCredits <= 0
+                        screensRemaining <= 0
                           ? "text-gray-500 bg-gray-100 opacity-50 cursor-not-allowed"
                           : "text-gray-700 bg-gray-100 hover:bg-gray-200"
                       }`}
@@ -530,34 +539,79 @@ export default function UserDashboardPage() {
             className="bg-white rounded-xl shadow-lg max-w-md w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Buy EigenCredits</h3>
-            <p className="text-sm text-gray-600 mb-4">How many EigenCredits do you want to buy?</p>
-            <input
-              type="number"
-              min={1}
-              value={creditsQuantity}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                setCreditsQuantity(Number.isInteger(v) && v >= 1 ? v : 1);
-              }}
-              className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-gray-900 mb-6"
-            />
-            <div className="flex gap-2 justify-end">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Buy or upgrade</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              One-time purchases. A new plan replaces your current one; Screen Wallet top-ups stack on top and are used after your plan&apos;s screens run out.
+            </p>
+
+            <div className="space-y-3">
+              {/* Single Role */}
+              <div className="border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-900">Single Role — $149</p>
+                  <p className="text-xs text-gray-500">1 role · 1,500 screens · 60 days</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={creditsLoading}
+                  onClick={() => handleCheckout("single_role")}
+                  className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 shrink-0"
+                >
+                  Buy
+                </button>
+              </div>
+
+              {/* Team */}
+              <div className="border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-900">Team — $699</p>
+                  <p className="text-xs text-gray-500">10 roles · 15,000 screens · 6 months · ATS</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={creditsLoading}
+                  onClick={() => handleCheckout("team")}
+                  className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 shrink-0"
+                >
+                  Buy
+                </button>
+              </div>
+
+              {/* Screen Wallet top-up */}
+              <div className="border border-gray-200 rounded-lg p-3">
+                <p className="font-semibold text-gray-900">Screen Wallet — $0.15/screen</p>
+                <p className="text-xs text-gray-500 mb-2">Top up overage screens; used after your plan bucket runs out.</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={creditsQuantity}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setCreditsQuantity(Number.isInteger(v) && v >= 1 ? v : 1);
+                    }}
+                    className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
+                  />
+                  <button
+                    type="button"
+                    disabled={creditsLoading}
+                    onClick={() => handleCheckout("wallet_topup", creditsQuantity)}
+                    className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    {creditsLoading ? "…" : `Top up ${creditsQuantity}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4">
               <button
                 type="button"
                 disabled={creditsLoading}
                 onClick={() => setCreditsModal(false)}
                 className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium disabled:opacity-50"
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={creditsLoading}
-                onClick={handleBuyCreditsProceed}
-                className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
-              >
-                {creditsLoading ? "Redirecting…" : "Proceed to Checkout"}
+                Close
               </button>
             </div>
           </div>

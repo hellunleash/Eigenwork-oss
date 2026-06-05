@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { applyCreditMutation, markPaddleTransactionProcessed, makeOpId } from "@/lib/credit-ledger";
+import { markPaddleTransactionProcessed, makeOpId } from "@/lib/credit-ledger";
+import { grantPass, creditWallet } from "@/lib/entitlements";
 import { getRequestId, log } from "@/lib/server-logger";
 
 export const runtime = "nodejs";
@@ -59,9 +60,14 @@ export async function POST(req: Request) {
       ((data.transaction as { custom_data?: Record<string, unknown> } | undefined)?.custom_data ?? null) ??
       (data.checkout as Record<string, unknown> | undefined)?.customData ??
       ((data.checkout as { custom_data?: Record<string, unknown> } | undefined)?.custom_data ?? null);
-    const rawUserId =
-      (customData as { userId?: unknown } | null | undefined)?.userId;
-    const userId = typeof rawUserId === "string" ? rawUserId : undefined;
+    // ADR-002: new checkouts carry { orgId, kind } in customData.
+    const rawOrgId = (customData as { orgId?: unknown } | null | undefined)?.orgId;
+    const orgId = typeof rawOrgId === "string" ? rawOrgId : undefined;
+    const rawKind = (customData as { kind?: unknown } | null | undefined)?.kind;
+    const kind =
+      rawKind === "single_role" || rawKind === "team" || rawKind === "wallet_topup"
+        ? rawKind
+        : undefined;
 
     const possibleItemCollections: unknown[] = [
       (data.items as Array<{ quantity?: number }> | undefined),
@@ -87,29 +93,36 @@ export async function POST(req: Request) {
       quantity = Number(maybeQuantityField) || 0;
     }
 
-    if (userId && quantity > 0) {
+    if (orgId && kind) {
       try {
-        // Idempotency: dedupe on Paddle transaction id when available; otherwise fall back to a stable opId from payload.
-        const opId = makeOpId({ source: "paddle", userId, txnId: txnId ?? "unknown", quantity, eventType });
+        // Idempotency: dedupe on the Paddle transaction id. grantPass/creditWallet
+        // are not self-idempotent, so the mark gate must run before them.
+        const opId = makeOpId({ source: "paddle", orgId, kind, txnId: txnId ?? "unknown", quantity, eventType });
         if (txnId) {
           const first = await markPaddleTransactionProcessed(txnId, opId);
           if (!first) {
-            log("info", "paddle.webhook_duplicate_ignored", { requestId, route, opId, userId, txnId });
+            log("info", "paddle.webhook_duplicate_ignored", { requestId, route, opId, orgId, txnId });
             return NextResponse.json({ success: true });
           }
         }
-        await applyCreditMutation({
-          userId,
-          delta: quantity,
-          source: "paddle",
-          opId,
-          metadata: { txnId: txnId ?? null, eventType, quantity },
-        });
+        if (kind === "wallet_topup") {
+          // Variable-quantity wallet top-up: quantity = number of screens.
+          await creditWallet({
+            orgId,
+            screens: quantity,
+            opId,
+            metadata: { txnId: txnId ?? null, eventType, quantity },
+          });
+        } else {
+          // single_role | team — grant the bundled pass (fixed screen cap).
+          await grantPass(orgId, kind, { paddleTransactionId: txnId ?? undefined });
+        }
+        log("info", "paddle.webhook_granted", { requestId, route, orgId, kind, quantity, txnId });
       } catch (err) {
-        log("error", "paddle.webhook_credit_failed", { requestId, route, userId, txnId, quantity }, err);
+        log("error", "paddle.webhook_grant_failed", { requestId, route, orgId, kind, txnId, quantity }, err);
       }
-    } else if (!userId) {
-      log("warn", "paddle.webhook_missing_userId", { requestId, route, txnId });
+    } else {
+      log("warn", "paddle.webhook_missing_org_or_kind", { requestId, route, txnId });
     }
   }
 
