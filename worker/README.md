@@ -42,12 +42,21 @@ gcloud services enable \
 
 ## Deploy
 
-From the **repo root** (not `worker/`):
+The Docker build context must be the **repo root** (the image includes
+`lib/`), and the Dockerfile is at `worker/Dockerfile` — so builds go
+through Cloud Build via `cloudbuild.yaml`, **not** `run deploy --source`.
+(`gcloud run deploy` has no `--dockerfile` flag, and `--source` only finds
+a Dockerfile at the source root.)
+
+Two steps, from the **repo root**:
 
 ```bash
+# 1. Build + push the image (worker/Dockerfile, repo-root context)
+gcloud builds submit --config cloudbuild.yaml
+
+# 2. Deploy that image (first deploy sets resources; they persist after)
 gcloud run deploy eigen-compute \
-  --source . \
-  --dockerfile worker/Dockerfile \
+  --image us-central1-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/eigen-compute:latest \
   --region us-central1 \
   --memory 2Gi \
   --cpu 2 \
@@ -159,13 +168,15 @@ gcloud run services logs read eigen-compute --limit 50
 
 ## Day-to-day redeploy
 
-When worker logic changes (rare), from repo root:
+When worker logic changes, from the repo root (env vars + resource
+settings persist across redeploys):
 
 ```bash
-gcloud run deploy eigen-compute --source . --dockerfile worker/Dockerfile
+gcloud builds submit --config cloudbuild.yaml && \
+gcloud run deploy eigen-compute \
+  --image us-central1-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/eigen-compute:latest \
+  --region us-central1
 ```
-
-Env vars persist across redeploys.
 
 ---
 
