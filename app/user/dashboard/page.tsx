@@ -4,7 +4,6 @@ export const dynamic = "force-dynamic";
 
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import Script from "next/script";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { mutate as swrMutate } from "swr";
@@ -12,6 +11,7 @@ import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
+import { UserSidebar } from "./UserSidebar";
 
 declare global {
   interface Window {
@@ -59,6 +59,8 @@ export default function UserDashboardPage() {
   const [orgs, setOrgs] = useState<
     Array<{ orgId: string; name: string; plan: string | null; role: string | null; isActive: boolean }>
   >([]);
+  const [userName, setUserName] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   // Use the SWR-based dashboard data hook
   const { pipelines, entitlement, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
@@ -74,6 +76,8 @@ export default function UserDashboardPage() {
       }
       setAuthChecking(false);
       setUserId(user.uid);
+      setUserName(user.displayName);
+      setUserEmail(user.email);
     });
     return () => unsub();
   }, [router]);
@@ -314,64 +318,27 @@ export default function UserDashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 pl-60">
       <Script
         src="https://cdn.paddle.com/paddle/v2/paddle.js"
         strategy="lazyOnload"
         onLoad={handlePaddleLoad}
       />
+      <UserSidebar
+        planLabel={planLabel}
+        screensRemaining={screensRemaining}
+        plan={entitlement?.plan ?? null}
+        orgs={orgs}
+        activeOrgId={entitlement?.orgId ?? null}
+        onSwitchOrg={handleSwitchOrg}
+        onBuy={() => setCreditsModal(true)}
+        onLogout={handleLogout}
+        userName={userName}
+        userEmail={userEmail}
+      />
       <div className="border-b border-gray-200 bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
-          <h1 className="text-4xl md:text-[2.8125rem] font-bold text-gray-900 tracking-tight">
-            EigenWork
-          </h1>
-          <div className="flex items-center gap-3 shrink-0">
-            {orgs.length > 1 && (
-              <select
-                value={entitlement?.orgId ?? ""}
-                onChange={(e) => handleSwitchOrg(e.target.value)}
-                className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium"
-                title="Switch workspace"
-              >
-                {orgs.map((o) => (
-                  <option key={o.orgId} value={o.orgId}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium">
-              {planLabel} · {screensRemaining} screens
-            </span>
-            {entitlement?.plan === "team" && (
-              <Link
-                href="/user/team"
-                className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
-              >
-                Team
-              </Link>
-            )}
-            <Link
-              href="/pricing"
-              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
-            >
-              Pricing
-            </Link>
-            <button
-              type="button"
-              onClick={() => setCreditsModal(true)}
-              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors"
-            >
-              Buy / Upgrade
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="px-3 py-1.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors shrink-0"
-            >
-              Logout
-            </button>
-          </div>
+        <div className="px-6 py-4">
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
         </div>
       </div>
 
