@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { getAdminDb, FieldValue, adminStorageDownload } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
-import { applyCreditMutation, makeOpId } from "@/lib/credit-ledger";
+import { makeOpId } from "@/lib/credit-ledger";
+import { consumeEval } from "@/lib/entitlements";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
 
 export const runtime = "nodejs";
@@ -43,6 +44,7 @@ type EvalJob = {
   candidateId: string;
   jobId?: string | null;
   ownerUserId?: string | null;
+  ownerOrgId?: string | null;
   resumePath?: string | null;
   githubUrl?: string | null;
   experience?: string | null;
@@ -167,24 +169,23 @@ export async function POST(req: Request) {
     // candidate doc with creditNotDeducted:true so the founder can see in
     // their dashboard which candidates went through "on the house" after
     // their balance ran out, and we log loud so this case is easy to grep.
-    if (data.ownerUserId) {
-      const opId = makeOpId({ source: "evaluation", candidateId: data.candidateId, jobId: data.jobId ?? "", userId: data.ownerUserId });
-      const creditResult = await applyCreditMutation({
-        userId: data.ownerUserId,
-        delta: -1,
-        source: "evaluation",
+    if (data.ownerOrgId) {
+      const opId = makeOpId({ source: "screen", candidateId: data.candidateId, jobId: data.jobId ?? "", orgId: data.ownerOrgId });
+      const consumeResult = await consumeEval({
+        orgId: data.ownerOrgId,
+        jobId: data.jobId ?? null,
         opId,
         metadata: { candidateId: data.candidateId, jobId: data.jobId ?? null, evaluationJobId: evalJobId },
       });
-      if (!creditResult.applied && creditResult.reason === "insufficient_balance") {
-        log("error", "credit.insufficient_balance_at_debit", {
+      if (!consumeResult.applied && consumeResult.reason === "no_screens") {
+        log("error", "screen.no_screens_at_debit", {
           ...ctx,
           opId,
         });
         await candidateRef.set(
           {
             creditNotDeducted: true,
-            creditNotDeductedReason: "insufficient_balance",
+            creditNotDeductedReason: "no_screens",
           },
           { merge: true }
         );

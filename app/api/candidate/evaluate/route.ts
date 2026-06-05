@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { getAdminDb, FieldValue, adminStorageUpload } from "@/lib/firebase-admin";
 import { allowRequest } from "@/lib/rate-limit";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
-import { getUserProfile } from "@/lib/user-credits";
+import { canEvaluate } from "@/lib/entitlements";
 
 
 // Junior path can spend 35-60s in Doc AI + GitHub + 2 LLM calls. 60s left no
@@ -209,6 +209,7 @@ export async function POST(req: NextRequest) {
     // Load job: owner, isClosed gate, submissionCap gate
     // ------------------------------------------------------
     let userId: string | null = null;
+    let ownerOrgId: string | null = null;
     let jobData: Record<string, unknown> | null = null;
     if (jobId && typeof jobId === "string") {
       const db = getAdminDb();
@@ -216,6 +217,7 @@ export async function POST(req: NextRequest) {
       const rawJobData = jobSnap.data();
       jobData = (rawJobData ?? null) as Record<string, unknown> | null;
       userId = typeof jobData?.userId === "string" ? (jobData.userId as string) : null;
+      ownerOrgId = typeof jobData?.orgId === "string" ? (jobData.orgId as string) : null;
     }
 
     // isClosed gate: founder explicitly closed the pipeline. Previously this
@@ -266,10 +268,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (userId) {
-      const profile = await getUserProfile(userId);
-      if ((profile.eigenCredits ?? 0) <= 0) {
-        return NextResponse.json({ error: "no_credits" }, { status: 402 });
+    if (ownerOrgId) {
+      const decision = await canEvaluate(ownerOrgId);
+      if (!decision.allowed) {
+        return NextResponse.json({ error: "no_screens" }, { status: 402 });
       }
     }
 
@@ -322,6 +324,7 @@ export async function POST(req: NextRequest) {
       candidateId: docRef.id,
       jobId: jobId ?? null,
       ownerUserId: userId,
+      ownerOrgId,
       resumePath,
       githubUrl: githubUrl || null,
       experience: experience ?? null,

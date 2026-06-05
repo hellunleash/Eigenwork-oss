@@ -44,7 +44,8 @@ import {
   FieldValue,
 } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
-import { applyCreditMutation, makeOpId } from "@/lib/credit-ledger";
+import { makeOpId } from "@/lib/credit-ledger";
+import { consumeEval } from "@/lib/entitlements";
 import {
   getRoleFitCachedLabelsBatch,
   setRoleFitCachedLabelsBatch,
@@ -152,6 +153,7 @@ type EvalJob = {
   candidateId: string;
   jobId?: string | null;
   ownerUserId?: string | null;
+  ownerOrgId?: string | null;
   resumePath?: string | null;
   githubUrl?: string | null;
   experience?: string | null;
@@ -286,18 +288,18 @@ async function handleWorkerEvaluate(req: ExpressRequest, res: ExpressResponse): 
       );
     });
 
-    // Credit deduction with insufficient-balance handling (see lib/credit-ledger.ts).
-    if (data.ownerUserId) {
+    // Screen deduction (org-scoped entitlements). Draws from the active pass
+    // bucket first, then the overage wallet. See lib/entitlements.ts.
+    if (data.ownerOrgId) {
       const opId = makeOpId({
-        source: "evaluation",
+        source: "screen",
         candidateId: data.candidateId,
         jobId: data.jobId ?? "",
-        userId: data.ownerUserId,
+        orgId: data.ownerOrgId,
       });
-      const creditResult = await applyCreditMutation({
-        userId: data.ownerUserId,
-        delta: -1,
-        source: "evaluation",
+      const consumeResult = await consumeEval({
+        orgId: data.ownerOrgId,
+        jobId: data.jobId ?? null,
         opId,
         metadata: {
           candidateId: data.candidateId,
@@ -305,12 +307,12 @@ async function handleWorkerEvaluate(req: ExpressRequest, res: ExpressResponse): 
           evaluationJobId: evalJobId,
         },
       });
-      if (!creditResult.applied && creditResult.reason === "insufficient_balance") {
-        log("error", "credit.insufficient_balance_at_debit", { ...ctx, opId });
+      if (!consumeResult.applied && consumeResult.reason === "no_screens") {
+        log("error", "screen.no_screens_at_debit", { ...ctx, opId });
         await candidateRef.set(
           {
             creditNotDeducted: true,
-            creditNotDeductedReason: "insufficient_balance",
+            creditNotDeductedReason: "no_screens",
           },
           { merge: true }
         );

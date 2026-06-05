@@ -18,12 +18,14 @@
  */
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
 import { requireFirebaseUser, type AuthResult } from "@/lib/auth-server";
+import { PASS_SPEC, MS_PER_DAY } from "@/lib/entitlement-spec";
 
 export type OrgRole = "owner" | "admin" | "member";
 export type OrgPlan = "free" | "single_role" | "team";
 
 const ORGS_COLLECTION = "orgs";
 const MEMBERS_SUBCOLLECTION = "members";
+const PASSES_SUBCOLLECTION = "passes";
 const USER_ORGS_COLLECTION = "userOrgs";
 
 export type OrgContext =
@@ -55,11 +57,28 @@ export async function ensurePersonalOrg(userId: string): Promise<string> {
     }
 
     const orgId = newOrgRef.id;
+    // Grant the Free pass (100 screens, no expiry) atomically with provisioning
+    // so every new org starts with its bundled entitlement. Pass shape mirrors
+    // grantPass() in lib/entitlements.ts.
+    const freeSpec = PASS_SPEC.free;
+    const passRef = newOrgRef.collection(PASSES_SUBCOLLECTION).doc();
+    const nowMs = Date.now();
     tx.set(newOrgRef, {
       name: "My Workspace",
       ownerUserId: userId,
       plan: "free" satisfies OrgPlan,
+      activePassId: passRef.id,
       createdAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(passRef, {
+      kind: "free",
+      screenCap: freeSpec.screenCap,
+      roleLimit: freeSpec.roleLimit,
+      atsEnabled: freeSpec.atsEnabled,
+      expiresAtMs: freeSpec.validityDays != null ? nowMs + freeSpec.validityDays * MS_PER_DAY : null,
+      status: "active",
+      createdAtMs: nowMs,
+      paddleTransactionId: null,
     });
     tx.set(newOrgRef.collection(MEMBERS_SUBCOLLECTION).doc(userId), {
       role: "owner" satisfies OrgRole,

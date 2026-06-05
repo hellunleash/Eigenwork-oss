@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
 import { requireOrgMember } from "@/lib/org";
+import { canActivateRole } from "@/lib/entitlements";
 import { getRequestId, log } from "@/lib/server-logger";
 
 /**
@@ -80,6 +81,19 @@ export async function POST(req: Request) {
       }
       await db.collection("jds").doc(existingJobId).update(payload);
       return NextResponse.json({ success: true, jobId: existingJobId });
+    }
+
+    // Active-role limit (plan roleLimit). Only enforced on creation, not edits.
+    const roleCheck = await canActivateRole(ctx.orgId);
+    if (!roleCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: "role_limit_reached",
+          roleLimit: roleCheck.roleLimit,
+          activeRoles: roleCheck.activeRoles,
+        },
+        { status: 402 }
+      );
     }
 
     const docRef = await db.collection("jds").add({
