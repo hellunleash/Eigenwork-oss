@@ -4,13 +4,11 @@ export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOut, onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { mutate as swrMutate } from "swr";
 import { auth } from "@/lib/firebase";
-import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
-import { UserSidebar } from "./UserSidebar";
 import { FreeClaimGate } from "./FreeClaimGate";
 
 type Pipeline = {
@@ -36,29 +34,10 @@ export default function UserDashboardPage() {
   const [generateElapsed, setGenerateElapsed] = useState(0);
   const [deleteModal, setDeleteModal] = useState<Pipeline | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [orgs, setOrgs] = useState<
-    Array<{ orgId: string; name: string; plan: string | null; role: string | null; isActive: boolean }>
-  >([]);
-  const [userName, setUserName] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== "undefined" && localStorage.getItem("ew_sidebar_collapsed") === "1") {
-      setSidebarCollapsed(true);
-    }
-  }, []);
-  const toggleSidebar = () =>
-    setSidebarCollapsed((c) => {
-      if (typeof window !== "undefined") localStorage.setItem("ew_sidebar_collapsed", c ? "0" : "1");
-      return !c;
-    });
 
   // Use the SWR-based dashboard data hook
   const { pipelines, entitlement, isLoading, error, revalidate, mutatePipelines } = useDashboardData(userId);
   const screensRemaining = entitlement?.screensRemaining ?? 0;
-  const planLabel =
-    entitlement?.plan === "team" ? "Team" : entitlement?.plan === "single_role" ? "Single Role" : "Free";
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -68,49 +47,9 @@ export default function UserDashboardPage() {
       }
       setAuthChecking(false);
       setUserId(user.uid);
-      setUserName(user.displayName);
-      setUserEmail(user.email);
     });
     return () => unsub();
   }, [router]);
-
-  useEffect(() => {
-    if (!userId) return;
-    let active = true;
-    (async () => {
-      try {
-        const token = await getIdTokenOrNull();
-        const res = await fetch("/api/org/list", {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (active && Array.isArray(data.orgs)) setOrgs(data.orgs);
-      } catch {
-        /* non-fatal: the switcher just won't render */
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [userId]);
-
-  const handleSwitchOrg = async (orgId: string) => {
-    try {
-      const token = await getIdTokenOrNull();
-      await fetch("/api/org/switch", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ orgId }),
-      });
-      window.location.reload();
-    } catch {
-      /* ignore */
-    }
-  };
 
   const handleCopyIntakeLink = (jobId: string) => {
     const url = typeof window !== "undefined" ? `${window.location.origin}/candidate?jobId=${jobId}` : "";
@@ -172,16 +111,6 @@ export default function UserDashboardPage() {
       clearInterval(ticker);
       setGenerateLoading(false);
       setGenerateElapsed(0);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      router.push("/");
-    } catch (e) {
-      console.error(e);
-      router.push("/");
     }
   };
 
@@ -271,36 +200,10 @@ export default function UserDashboardPage() {
   }
 
   return (
-    <div className={`min-h-screen bg-gray-50 transition-[padding] duration-200 ${sidebarCollapsed ? "pl-0" : "pl-60"}`}>
-      <UserSidebar
-        planLabel={planLabel}
-        screensRemaining={screensRemaining}
-        plan={entitlement?.plan ?? null}
-        orgs={orgs}
-        activeOrgId={entitlement?.orgId ?? null}
-        onSwitchOrg={handleSwitchOrg}
-        onBuy={() => router.push("/user/billing")}
-        onLogout={handleLogout}
-        userName={userName}
-        userEmail={userEmail}
-        collapsed={sidebarCollapsed}
-        onToggle={toggleSidebar}
-      />
-      {sidebarCollapsed && (
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          title="Open sidebar"
-          className="fixed top-3 left-3 z-40 bg-white border border-gray-200 rounded-lg p-2 shadow-sm hover:bg-gray-50"
-        >
-          <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-      )}
-      <div className="border-b border-gray-200 bg-white">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <div className="border-b border-gray-200 bg-white dark:bg-gray-900 dark:border-gray-800">
         <div className="px-6 py-4">
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Dashboard</h1>
         </div>
       </div>
 
