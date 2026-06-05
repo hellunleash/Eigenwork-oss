@@ -39,7 +39,7 @@ export default function RootLayout({
         {/* Apply the saved theme before paint to avoid a flash of the wrong mode. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{if(localStorage.getItem('ew_theme')==='dark'){document.documentElement.classList.add('dark')}}catch(e){}`,
+            __html: `try{document.documentElement.classList.remove('dark')}catch(e){}`,
           }}
         />
       </head>

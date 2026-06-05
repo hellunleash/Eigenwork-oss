@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
+import useSWR from "swr";
 import { usePageTitle } from "@/lib/use-page-title";
 
 declare global {
@@ -48,8 +49,6 @@ export default function BillingPage() {
   const router = useRouter();
 
   const [authChecking, setAuthChecking] = useState(true);
-  const [me, setMe] = useState<Me | null>(null);
-  const [prices, setPrices] = useState<Record<string, string | null>>({});
   const [walletQty, setWalletQty] = useState(1000);
   const [busy, setBusy] = useState<Kind | null>(null);
   const paddleInit = useRef(false);
@@ -62,28 +61,22 @@ export default function BillingPage() {
     return () => unsub();
   }, [router]);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [meRes, cfgRes] = await Promise.all([
-        (async () => {
-          const t = await getIdTokenOrNull();
-          return fetch("/api/user/me", { headers: t ? { Authorization: `Bearer ${t}` } : undefined });
-        })(),
-        fetch("/api/paddle/config"),
-      ]);
-      if (meRes.ok) setMe(await meRes.json());
-      if (cfgRes.ok) {
-        const cfg = await cfgRes.json();
-        setPrices(cfg?.prices ?? {});
-      }
-    } catch {
-      /* surfaced via empty state */
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!authChecking) refresh();
-  }, [authChecking, refresh]);
+  const { data: me } = useSWR<Me>(
+    authChecking ? null : "/api/user/me",
+    async (url: string) => {
+      const t = await getIdTokenOrNull();
+      const r = await fetch(url, { headers: t ? { Authorization: `Bearer ${t}` } : undefined });
+      if (!r.ok) throw new Error("fetch_failed");
+      return r.json();
+    },
+    { dedupingInterval: 5000 }
+  );
+  const { data: cfg } = useSWR(
+    authChecking ? null : "/api/paddle/config",
+    (url: string) => fetch(url).then((r) => r.json()),
+    { dedupingInterval: 60000 }
+  );
+  const prices: Record<string, string | null> = cfg?.prices ?? {};
 
   const handlePaddleLoad = useCallback(() => {
     if (typeof window === "undefined" || !window.Paddle || paddleInit.current) return;
