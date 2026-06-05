@@ -2,7 +2,8 @@
 
 export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import useSWR from "swr";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
@@ -26,6 +27,12 @@ async function authedFetch(url: string, init?: RequestInit) {
   });
 }
 
+const swrFetcher = (url: string) =>
+  authedFetch(url).then((r) => {
+    if (!r.ok) throw new Error("fetch_failed");
+    return r.json();
+  });
+
 const ROLE_PILL: Record<Role, string> = {
   owner: "bg-gray-900 text-white",
   admin: "bg-indigo-100 text-indigo-800",
@@ -37,13 +44,7 @@ export default function TeamPage() {
   const router = useRouter();
 
   const [authChecking, setAuthChecking] = useState(true);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [members, setMembers] = useState<Member[]>([]);
-  const [invites, setInvites] = useState<Invite[]>([]);
-  const [yourRole, setYourRole] = useState<Role>("member");
-  const [plan, setPlan] = useState<string | null>(null);
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"member" | "admin">("member");
@@ -62,30 +63,23 @@ export default function TeamPage() {
     return () => unsub();
   }, [router]);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [mRes, meRes] = await Promise.all([
-        authedFetch("/api/org/members"),
-        authedFetch("/api/user/me"),
-      ]);
-      if (!mRes.ok) throw new Error("Failed to load members");
-      const m = await mRes.json();
-      const me = meRes.ok ? await meRes.json() : {};
-      setMembers(Array.isArray(m.members) ? m.members : []);
-      setInvites(Array.isArray(m.invites) ? m.invites : []);
-      setYourRole((m.yourRole as Role) ?? "member");
-      setPlan(typeof me.plan === "string" ? me.plan : null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load team");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data: membersData,
+    isLoading: membersLoading,
+    mutate: mutateMembers,
+  } = useSWR(authChecking ? null : "/api/org/members", swrFetcher, {
+    revalidateOnFocus: true,
+    dedupingInterval: 5000,
+  });
+  const { data: meData } = useSWR(authChecking ? null : "/api/user/me", swrFetcher, {
+    dedupingInterval: 5000,
+  });
 
-  useEffect(() => {
-    if (!authChecking) load();
-  }, [authChecking, load]);
+  const members: Member[] = Array.isArray(membersData?.members) ? membersData.members : [];
+  const invites: Invite[] = Array.isArray(membersData?.invites) ? membersData.invites : [];
+  const yourRole: Role = (membersData?.yourRole as Role) ?? "member";
+  const plan: string | null = typeof meData?.plan === "string" ? meData.plan : null;
+  const loading = membersLoading && !membersData;
 
   const inviteLinkFor = (token: string) =>
     typeof window !== "undefined" ? `${window.location.origin}/invite?token=${token}` : "";
@@ -121,7 +115,7 @@ export default function TeamPage() {
       }
       setInviteEmail("");
       setLastInviteLink(inviteLinkFor(data.token));
-      await load();
+      await mutateMembers();
     } finally {
       setBusy(null);
     }
@@ -140,7 +134,7 @@ export default function TeamPage() {
         setError(data?.error ? `Action failed: ${data.error}` : "Action failed.");
         return;
       }
-      await load();
+      await mutateMembers();
     } finally {
       setBusy(null);
     }
