@@ -60,151 +60,59 @@ export default function JDInputPage() {
 
   if (authChecking) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#fafafa",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif",
-        }}
-      >
-        <p style={{ color: "#6b7280", fontSize: "14px" }}>Checking authentication…</p>
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center font-sans">
+        <p className="text-gray-500 dark:text-gray-400 text-sm">Checking authentication…</p>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#fafafa",
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif",
-      }}
-    >
-      <nav
-        style={{
-          borderBottom: "1px solid #e5e7eb",
-          background: "white",
-          padding: "16px 24px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 font-sans">
+      <nav className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-6 py-4 flex items-center justify-between">
         <a
           href="/user/dashboard"
-          style={{ fontWeight: 700, fontSize: "20px", color: "#111827", textDecoration: "none", letterSpacing: "-0.025em" }}
+          className="font-bold text-xl text-gray-900 dark:text-gray-100 no-underline tracking-tight"
         >
           EigenWork
         </a>
-        <a href="/user/dashboard" style={{ fontSize: "14px", color: "#6b7280", textDecoration: "none" }}>
+        <a href="/user/dashboard" className="text-sm text-gray-500 dark:text-gray-400 no-underline hover:text-gray-700 dark:hover:text-gray-300">
           ← Dashboard
         </a>
       </nav>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "40px 24px",
-        }}
-      >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "640px",
-          background: "white",
-          borderRadius: "12px",
-          border: "1px solid #e5e7eb",
-          padding: "48px",
-          boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
-        }}
-      >
-        <div style={{ marginBottom: "32px" }}>
-          <h1
-            style={{
-              fontSize: "24px",
-              fontWeight: "600",
-              marginBottom: "8px",
-              color: "#111827",
-              letterSpacing: "-0.025em",
-              lineHeight: "1.3",
-            }}
-          >
-            Job Description
-          </h1>
-          <p
-            style={{
-              fontSize: "14px",
-              color: "#111827",
-              margin: 0,
-              lineHeight: "1.5",
-            }}
-          >
-            Paste your Tech Role Description. We&apos;ll extract and structure the key information automatically.
-          </p>
-        </div>
+      <div className="flex items-center justify-center px-6 py-10">
+        <div className="w-full max-w-2xl bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-12 shadow-sm">
+          <div className="mb-8">
+            <h1 className="text-2xl font-semibold mb-2 text-gray-900 dark:text-gray-100 tracking-tight leading-snug">
+              Job Description
+            </h1>
+            <p className="text-sm text-gray-900 dark:text-gray-300 m-0 leading-relaxed">
+              Paste your Tech Role Description. We&apos;ll extract and structure the key information automatically.
+            </p>
+          </div>
 
-        <div style={{ marginBottom: "24px" }}>
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Paste job description here..."
-            style={{
-              width: "100%",
-              minHeight: "280px",
-              padding: "16px",
-              borderRadius: "8px",
-              border: "1px solid #d1d5db",
-              outline: "none",
-              fontSize: "14px",
-              fontFamily: "inherit",
-              color: "#111827",
-              resize: "vertical",
-              lineHeight: "1.6",
-              transition: "border-color 0.15s ease",
-            }}
-            onFocus={(e) => {
-              e.target.style.borderColor = "#3b82f6";
-            }}
-            onBlur={(e) => {
-              e.target.style.borderColor = "#d1d5db";
-            }}
-          />
-        </div>
+          <div className="mb-6">
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Paste job description here..."
+              className="w-full min-h-[280px] p-4 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm outline-none resize-y leading-relaxed transition-colors duration-150 focus:border-blue-500 dark:focus:border-blue-500"
+            />
+          </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "12px 24px",
-            background: loading ? "#9ca3af" : "#111827",
-            color: "white",
-            borderRadius: "8px",
-            fontSize: "14px",
-            fontWeight: "500",
-            cursor: loading ? "not-allowed" : "pointer",
-            border: "none",
-            transition: "background-color 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            if (!loading) {
-              e.currentTarget.style.background = "#374151";
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!loading) {
-              e.currentTarget.style.background = "#111827";
-            }
-          }}
-        >
-          {loading ? "Processing..." : "Continue"}
-        </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className={`w-full py-3 px-6 rounded-lg text-sm font-medium transition-colors duration-150 ${
+              loading
+                ? "bg-gray-400 dark:bg-gray-600 text-white cursor-not-allowed"
+                : "bg-gray-900 dark:bg-indigo-600 text-white hover:bg-gray-700 dark:hover:bg-indigo-700 cursor-pointer"
+            }`}
+          >
+            {loading ? "Processing..." : "Continue"}
+          </button>
+        </div>
       </div>
-      </div>
+    </div>
     </div>
   );
 }
