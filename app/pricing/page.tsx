@@ -83,8 +83,29 @@ const TIERS: Tier[] = [
 ];
 
 export default function PricingPage() {
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "EigenWork",
+    "applicationCategory": "BusinessApplication",
+    "offers": {
+      "@type": "AggregateOffer",
+      "priceCurrency": "USD",
+      "lowPrice": "0",
+      "highPrice": "699",
+      "offers": TIERS.map((t) => ({
+        "@type": "Offer",
+        "name": t.name,
+        "price": t.price === "Custom" ? "0" : t.price.replace("$", ""),
+        "priceCurrency": "USD",
+        "description": t.tagline,
+      })),
+    },
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0e] dark:bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.15),rgba(255,255,255,0))] transition-colors duration-300 py-16 px-4 sm:px-6 lg:px-8">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="text-center mb-4">
