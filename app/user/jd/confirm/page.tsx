@@ -146,7 +146,7 @@ function JDConfirmContent() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Checking authentication…</p>
@@ -157,7 +157,7 @@ function JDConfirmContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
@@ -167,7 +167,7 @@ function JDConfirmContent() {
   }
   if (!form) {
     return (
-      <div className="min-h-screen bg-white transition-colors duration-300 flex flex-col items-center justify-center px-6">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col items-center justify-center px-6">
         <div className="max-w-md w-full text-center animate-scale-in">
           <div className="mb-6 animate-bounce-in">
             <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -259,7 +259,7 @@ function JDConfirmContent() {
   };
 
   return (
-    <div className="min-h-screen bg-white transition-colors duration-300 flex flex-col">
+    <div className="min-h-screen transition-colors duration-300 flex flex-col">
       {/* Sticky Header */}
       <nav className="sticky top-0 z-40 border-b border-gray-200/80 dark:border-white/[0.05] bg-white/80 dark:bg-[#0a0a0e]/80 backdrop-blur-md transition-all duration-300">
         <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
@@ -682,7 +682,7 @@ function JDConfirmContent() {
 export default function JDConfirmPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
