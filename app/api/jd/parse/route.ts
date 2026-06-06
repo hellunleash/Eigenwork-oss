@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { cleanAndParseJSON } from "@/lib/eti/rubric-compress";
 import { requireFirebaseUser } from "@/lib/auth-server";
 import { allowRequest } from "@/lib/rate-limit";
-import { getRequestId, log, timeMs } from "@/lib/server-logger";
+import { getRequestId, log, timeMs, type LogContext } from "@/lib/server-logger";
 
 // JD length cap. Realistic job descriptions are 1-10k chars; very long ones
 // (with full company description + benefits + mission) reach ~15k. 50k is
@@ -20,6 +20,15 @@ const PER_USER_PARSE_LIMIT = 30;
 const PER_USER_PARSE_WINDOW_SECONDS = 60;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+// JD parsing only needs to pull a handful of fields out of pasted text that the
+// user reviews & edits on the very next screen, so Flash-Lite is plenty — far
+// cheaper than Flash and with little/no "thinking" overhead. 2.5 Flash-Lite is
+// slated for deprecation around Sep/Oct 2026; once Google retires it the
+// primary call will start erroring. Rather than fail the parse, fall back to
+// the next-gen Lite model. Swap these strings as the model lineup moves on.
+const JD_MODEL_PRIMARY = "gemini-2.5-flash-lite";
+const JD_MODEL_FALLBACK = "gemini-3.1-flash-lite";
 
 const JD_PARSE_SCHEMA = `
 Output ONLY a valid JSON object with exactly these fields (no markdown, no commentary):
@@ -43,7 +52,7 @@ function toStrArray(val: unknown): string[] {
   return val.map((x) => String(x).trim()).filter(Boolean);
 }
 
-async function parseJDWithLLM(text: string): Promise<{
+type ParsedJD = {
   title: string;
   seniority: string;
   role_category: string;
@@ -54,9 +63,11 @@ async function parseJDWithLLM(text: string): Promise<{
   location_type: string;
   yoe_required: string;
   employment_type: string;
-}> {
+};
+
+async function runParseModel(text: string, modelName: string): Promise<ParsedJD> {
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: modelName,
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0,
@@ -82,6 +93,18 @@ async function parseJDWithLLM(text: string): Promise<{
     yoe_required: String(parsed.yoe_required ?? ""),
     employment_type: String(parsed.employment_type ?? ""),
   };
+}
+
+async function parseJDWithLLM(text: string, ctx: LogContext): Promise<ParsedJD> {
+  try {
+    return await runParseModel(text, JD_MODEL_PRIMARY);
+  } catch (err) {
+    // Primary failed (most likely once 2.5 Flash-Lite is deprecated, but also
+    // any transient model error). Retry once on the fallback model rather than
+    // failing the parse — logged as a warn so the switch isn't silent.
+    log("warn", "jd.parse_fallback", { ...ctx, primary: JD_MODEL_PRIMARY, fallback: JD_MODEL_FALLBACK }, err);
+    return await runParseModel(text, JD_MODEL_FALLBACK);
+  }
 }
 
 export async function POST(req: Request) {
@@ -150,7 +173,7 @@ export async function POST(req: Request) {
     }
 
     const t = timeMs();
-    const parsed = await parseJDWithLLM(jd);
+    const parsed = await parseJDWithLLM(jd, { requestId, route, userId: auth.userId });
     log("info", "jd.parse_ok", { requestId, route, userId: auth.userId, latencyMs: t() });
     return NextResponse.json({ success: true, data: parsed });
   } catch (err) {
