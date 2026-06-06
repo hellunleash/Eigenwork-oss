@@ -27,25 +27,61 @@ function extractJSON(text: string, ctx: LogContext) {
   }
 }
 
+// Transient OpenAI failures (429 rate-limit, 5xx, network/empty-output) are
+// retried with exponential backoff that honors a server-sent Retry-After; other
+// 4xx (bad request) fail fast. This is what makes the now-concurrent junior
+// blocks safe: a rate-limit response waits and retries rather than failing the
+// evaluation outright.
+const MAX_LLM_ATTEMPTS = 5;
+const BASE_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30_000;
+
+function llmStatus(err: unknown): number | undefined {
+  const e = err as { status?: unknown; response?: { status?: unknown } };
+  const s = e?.status ?? e?.response?.status;
+  return typeof s === "number" ? s : undefined;
+}
+
+function llmRetryAfterMs(err: unknown): number | undefined {
+  const e = err as {
+    headers?: Record<string, unknown>;
+    response?: { headers?: Record<string, unknown> };
+  };
+  const headers = e?.headers ?? e?.response?.headers;
+  const raw = headers?.["retry-after"];
+  const secs = Number(raw);
+  return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : undefined;
+}
+
+function isTransientLlmError(err: unknown): boolean {
+  const status = llmStatus(err);
+  if (status === 429) return true;
+  if (status !== undefined && status >= 500) return true;
+  // No HTTP status = network error, timeout, or our own empty-output throw.
+  if (status === undefined) return true;
+  return false; // other 4xx — not worth retrying
+}
+
 async function safeGenerate(prompt: string, ctx: LogContext): Promise<string> {
-  let attempts = 0;
-  while (attempts < 2) {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
     try {
       const t = timeMs();
       const text = await runJsonModel(prompt, 10000);
       log("info", "llm.openai_ok", { ...ctx, latencyMs: t() });
       return text;
     } catch (err) {
-      attempts++;
-      log("warn", "llm.openai_retry", { ...ctx, attempt: attempts }, err);
-      if (attempts >= 2) throw err;
-      await new Promise((r) => setTimeout(r, 1200 * attempts));
+      lastErr = err;
+      if (attempt >= MAX_LLM_ATTEMPTS || !isTransientLlmError(err)) break;
+      const backoff =
+        llmRetryAfterMs(err) ??
+        Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      const jitter = Math.floor(Math.random() * 400);
+      log("warn", "llm.openai_retry", { ...ctx, attempt, backoffMs: backoff }, err);
+      await new Promise((r) => setTimeout(r, backoff + jitter));
     }
   }
-  // Unreachable: the loop only exits via `return` (success) or `throw`
-  // (final failure). The throw here exists solely to satisfy TS7030
-  // ("not all code paths return a value") under stricter compiler configs.
-  throw new Error("safeGenerate: unreachable");
+  throw lastErr instanceof Error ? lastErr : new Error("safeGenerate failed");
 }
 
 export type EvaluationInput = {
@@ -96,14 +132,20 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
   }
 
   if (isJunior) {
+    // ESQ (scores GitHub DNA) and the behavioral block (scores the resume) take
+    // independent inputs, so issue both model calls concurrently — this halves
+    // the wall-clock of a junior evaluation. Peak request concurrency is capped
+    // by the gate in lib/openai-client.ts and 429s are retried in safeGenerate,
+    // so the extra simultaneous call does not risk rate-limit failures.
     const promptESQ = buildETIPrompt({ context: githubContext, mode: "junior-esq" });
-    const rawESQ = String(await safeGenerate(promptESQ, { ...ctx, phase: "junior-esq" }));
+    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate });
+    const [rawESQ, rawBehav] = await Promise.all([
+      safeGenerate(promptESQ, { ...ctx, phase: "junior-esq" }),
+      safeGenerate(promptBehav, { ...ctx, phase: "junior-behavioral" }),
+    ]);
     const jsonESQ = extractJSON(rawESQ, { ...ctx, phase: "junior-esq" }) as Record<string, unknown>;
     const esq = jsonESQ ?? {};
     const ESQ = n(esq.A1) + n(esq.A2) + n(esq.A3) + n(esq.A4);
-
-    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate });
-    const rawBehav = String(await safeGenerate(promptBehav, { ...ctx, phase: "junior-behavioral" }));
     const jsonBehav = extractJSON(rawBehav, { ...ctx, phase: "junior-behavioral" }) as Record<string, unknown>;
 
     const pdq = (jsonBehav.pdq_breakdown as Record<string, unknown> | undefined) ?? {};
