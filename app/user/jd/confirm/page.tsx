@@ -146,10 +146,10 @@ function JDConfirmContent() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-900 mb-4"></div>
-          <p className="text-sm text-gray-600 animate-pulse-subtle">Checking authentication…</p>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Checking authentication…</p>
         </div>
       </div>
     );
@@ -157,33 +157,33 @@ function JDConfirmContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-900 mb-4"></div>
-          <p className="text-sm text-gray-600 animate-pulse-subtle">Loading…</p>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
         </div>
       </div>
     );
   }
   if (!form) {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
+      <div className="min-h-screen bg-white transition-colors duration-300 flex flex-col items-center justify-center px-6">
         <div className="max-w-md w-full text-center animate-scale-in">
           <div className="mb-6 animate-bounce-in">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
             {jobIdFromUrl ? "Job Not Found" : "No Job Data"}
           </h2>
-          <p className="text-sm text-gray-600 mb-6">
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
             {jobIdFromUrl ? "This job doesn't exist or you don't have access to it." : "No job data to confirm. Start from the pipeline creation flow."}
           </p>
           <button
             type="button"
             onClick={() => router.push("/user/dashboard")}
-            className="inline-flex px-6 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98]"
+            className="inline-flex px-6 py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98]"
           >
             Back to Dashboard
           </button>
@@ -259,20 +259,20 @@ function JDConfirmContent() {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
+    <div className="min-h-screen bg-white transition-colors duration-300 flex flex-col">
       {/* Sticky Header */}
-      <nav className="sticky top-0 z-40 border-b border-gray-200/80 bg-white/80 backdrop-blur-md transition-all duration-300">
+      <nav className="sticky top-0 z-40 border-b border-gray-200/80 dark:border-white/[0.05] bg-white/80 dark:bg-[#0a0a0e]/80 backdrop-blur-md transition-all duration-300">
         <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
           <button
             onClick={() => router.push("/user/dashboard")}
-            className="text-sm text-gray-600 hover:text-gray-900 transition-all duration-200 flex items-center gap-1.5 group hover:gap-2"
+            className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-all duration-200 flex items-center gap-1.5 group hover:gap-2"
           >
             <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
             Back to dashboard
           </button>
-          <span className="text-lg font-semibold tracking-tight text-gray-900">EigenWork</span>
+          <span className="text-lg font-semibold tracking-tight text-gray-900 dark:text-gray-100">EigenWork</span>
           <div className="w-20" /> {/* Spacer for centering */}
         </div>
       </nav>
@@ -282,10 +282,10 @@ function JDConfirmContent() {
         <div className="max-w-4xl mx-auto px-6">
           {/* Page Header */}
           <div className="mb-8 opacity-0 animate-fade-in-up" style={{ animationDelay: "0.05s", animationFillMode: "forwards" }}>
-            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 mb-2">
+            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 dark:text-gray-100 mb-2">
               {jobIdFromUrl ? "Edit Role" : "Review & Confirm"}
             </h1>
-            <p className="text-gray-600">
+            <p className="text-gray-600 dark:text-gray-400">
               {jobIdFromUrl ? "Update your role details and settings" : "Review the extracted details and configure your pipeline"}
             </p>
           </div>
@@ -293,16 +293,16 @@ function JDConfirmContent() {
           <div className="space-y-6">
             {/* Error Message */}
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3 animate-bounce-in">
-                <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-start gap-3 animate-bounce-in">
+                <svg className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-red-900">{error}</p>
+                  <p className="text-sm font-medium text-red-900 dark:text-red-200">{error}</p>
                 </div>
                 <button
                   onClick={() => setError(null)}
-                  className="text-red-600 hover:text-red-800 transition-colors"
+                  className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -312,20 +312,20 @@ function JDConfirmContent() {
             )}
 
             {/* Role Details Card */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 transition-all duration-300" style={{ animationDelay: "0.1s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.1s", animationFillMode: "forwards" }}>
+              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                   </svg>
                   Role Details
                 </h2>
-                <p className="text-xs text-gray-500 mt-0.5">Core information about the position</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Core information about the position</p>
               </div>
               <div className="p-6 space-y-5">
                 {/* Role Title (One-Liner) */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Role Title (One-Liner)
                   </label>
                   <div className="flex gap-0 group">
@@ -336,10 +336,10 @@ function JDConfirmContent() {
                       onFocus={() => setFocusedField("title")}
                       onBlur={() => setFocusedField(null)}
                       placeholder="e.g. Software Engineer"
-                      className={`flex-1 min-w-0 px-4 py-2.5 border border-r-0 rounded-l-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset focus:z-10 transition-all duration-200 ${focusedField === "title" ? "border-gray-300 shadow-sm" : "border-gray-200"}`}
+                      className={`flex-1 min-w-0 px-4 py-2.5 border border-r-0 rounded-l-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset focus:z-10 transition-all duration-200 ${focusedField === "title" ? "border-gray-300 dark:border-white/[0.15] shadow-sm" : "border-gray-200 dark:border-white/[0.1]"}`}
                     />
                     <div
-                      className={`px-4 py-2.5 border rounded-r-lg bg-gray-50 text-sm overflow-hidden text-ellipsis min-w-[140px] max-w-[55%] flex items-center transition-all duration-200 ${suffix ? "text-gray-700 border-gray-200" : "text-gray-400 italic border-gray-200"} ${focusedField === "title" ? "border-gray-300" : ""}`}
+                      className={`px-4 py-2.5 border rounded-r-lg bg-gray-50 dark:bg-gray-800 text-sm overflow-hidden text-ellipsis min-w-[140px] max-w-[55%] flex items-center transition-all duration-200 ${suffix ? "text-gray-700 dark:text-gray-300 border-gray-200 dark:border-white/[0.1]" : "text-gray-400 dark:text-gray-500 italic border-gray-200 dark:border-white/[0.1]"} ${focusedField === "title" ? "border-gray-300 dark:border-white/[0.15]" : ""}`}
                       title={suffix || "Add Primary/Secondary/Tertiary stack below"}
                     >
                       {suffix || "(Add stack below)"}
@@ -350,11 +350,11 @@ function JDConfirmContent() {
                 {/* Seniority & Role Category Grid */}
                 <div className="grid md:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                       Seniority
                     </label>
                     <select
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300 cursor-pointer"
+                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
                       value={form.seniority || ""}
                       onChange={(e) => update("seniority", e.target.value)}
                       onFocus={() => setFocusedField("seniority")}
@@ -370,11 +370,11 @@ function JDConfirmContent() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                       Role Category
                     </label>
                     <select
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300 cursor-pointer"
+                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
                       value={form.role_category || ""}
                       onChange={(e) => update("role_category", e.target.value)}
                       onFocus={() => setFocusedField("role_category")}
@@ -395,24 +395,24 @@ function JDConfirmContent() {
             </div>
 
             {/* Technical Stack Card */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 transition-all duration-300" style={{ animationDelay: "0.15s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.15s", animationFillMode: "forwards" }}>
+              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
                   </svg>
                   Technical Stack
                 </h2>
-                <p className="text-xs text-gray-500 mt-0.5">Define the technologies and tools required</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Define the technologies and tools required</p>
               </div>
               <div className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Primary
                   </label>
                   <input
                     type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300"
+                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
                     placeholder="e.g. C#/.NET, Python"
                     value={primaryRaw}
                     onChange={(e) => setPrimaryRaw(e.target.value)}
@@ -421,12 +421,12 @@ function JDConfirmContent() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Secondary
                   </label>
                   <input
                     type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300"
+                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
                     placeholder="e.g. REST APIs, Redis, Docker"
                     value={secondaryRaw}
                     onChange={(e) => setSecondaryRaw(e.target.value)}
@@ -435,12 +435,12 @@ function JDConfirmContent() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Tertiary
                   </label>
                   <input
                     type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300"
+                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
                     placeholder="e.g. Azure DevOps, Git"
                     value={tertiaryRaw}
                     onChange={(e) => setTertiaryRaw(e.target.value)}
@@ -450,8 +450,8 @@ function JDConfirmContent() {
                 </div>
                 {/* Stack Preview */}
                 {(primary.length > 0 || secondary.length > 0 || tertiary.length > 0) && (
-                  <div className="pt-4 border-t border-gray-100 animate-slide-in-right">
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <div className="pt-4 border-t border-gray-100 dark:border-white/[0.05] animate-slide-in-right">
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
@@ -460,21 +460,21 @@ function JDConfirmContent() {
                     </p>
                     <div className="space-y-2.5 text-sm">
                       {primary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 transition-colors hover:bg-gray-50">
-                          <span className="text-gray-500 font-medium min-w-[80px]">Primary:</span>
-                          <span className="text-gray-700">{primary.join(", ")}</span>
+                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Primary:</span>
+                          <span className="text-gray-700 dark:text-gray-300">{primary.join(", ")}</span>
                         </div>
                       )}
                       {secondary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 transition-colors hover:bg-gray-50">
-                          <span className="text-gray-500 font-medium min-w-[80px]">Secondary:</span>
-                          <span className="text-gray-700">{secondary.join(", ")}</span>
+                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Secondary:</span>
+                          <span className="text-gray-700 dark:text-gray-300">{secondary.join(", ")}</span>
                         </div>
                       )}
                       {tertiary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 transition-colors hover:bg-gray-50">
-                          <span className="text-gray-500 font-medium min-w-[80px]">Tertiary:</span>
-                          <span className="text-gray-700">{tertiary.join(", ")}</span>
+                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Tertiary:</span>
+                          <span className="text-gray-700 dark:text-gray-300">{tertiary.join(", ")}</span>
                         </div>
                       )}
                     </div>
@@ -484,25 +484,25 @@ function JDConfirmContent() {
             </div>
 
             {/* Work Arrangement Card */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 transition-all duration-300" style={{ animationDelay: "0.2s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.2s", animationFillMode: "forwards" }}>
+              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
                   Work Arrangement
                 </h2>
-                <p className="text-xs text-gray-500 mt-0.5">Location, experience, and employment details</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Location, experience, and employment details</p>
               </div>
               <div className="p-6 space-y-5">
                 <div className="grid md:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                       Location Type
                     </label>
                     <select
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300 cursor-pointer"
+                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
                       value={form.location_type || ""}
                       onChange={(e) => update("location_type", e.target.value)}
                       onFocus={() => setFocusedField("location")}
@@ -515,13 +515,13 @@ function JDConfirmContent() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                       Years of Experience
                     </label>
                     <input
                       type="number"
                       min={0}
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300"
+                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
                       placeholder="e.g. 3"
                       value={form.yoe_required || ""}
                       onChange={(e) => update("yoe_required", e.target.value)}
@@ -531,11 +531,11 @@ function JDConfirmContent() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Employment Type
                   </label>
                     <select
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 hover:border-gray-300 cursor-pointer"
+                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
                       value={form.employment_type || ""}
                       onChange={(e) => update("employment_type", e.target.value)}
                       onFocus={() => setFocusedField("employment")}
@@ -551,70 +551,70 @@ function JDConfirmContent() {
             </div>
 
             {/* Work Authorization Card */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 transition-all duration-300" style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}>
+              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                   Work Authorization
                 </h2>
-                <p className="text-xs text-gray-500 mt-0.5">Specify authorization requirements</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Specify authorization requirements</p>
               </div>
               <div className="p-6">
                 <div className="space-y-3">
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 transition-all duration-200">
+                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
                     <input
                       type="checkbox"
-                      className="w-4 h-4 text-gray-900 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 cursor-pointer transition-all duration-200"
+                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
                       checked={form.work_auth_us_required || false}
                       onChange={(e) => update("work_auth_us_required", e.target.checked)}
                     />
-                    <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors duration-200">US work authorization required</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">US work authorization required</span>
                   </label>
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 transition-all duration-200">
+                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
                     <input
                       type="checkbox"
-                      className="w-4 h-4 text-gray-900 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 cursor-pointer transition-all duration-200"
+                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
                       checked={form.work_auth_eu_required || false}
                       onChange={(e) => update("work_auth_eu_required", e.target.checked)}
                     />
-                    <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors duration-200">EU work authorization required</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">EU work authorization required</span>
                   </label>
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 transition-all duration-200">
+                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
                     <input
                       type="checkbox"
-                      className="w-4 h-4 text-gray-900 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 cursor-pointer transition-all duration-200"
+                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
                       checked={form.work_auth_provided || false}
                       onChange={(e) => update("work_auth_provided", e.target.checked)}
                     />
-                    <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors duration-200">Work authorization will be provided</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">Work authorization will be provided</span>
                   </label>
                 </div>
               </div>
             </div>
 
             {/* Pipeline Settings Card */}
-            <div className={`bg-white rounded-xl border shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md transition-all duration-300 ${error ? "border-red-200" : "border-gray-200 hover:border-gray-300"}`} style={{ animationDelay: "0.3s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className={`bg-white dark:bg-white/[0.02] rounded-xl border shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md transition-all duration-300 ${error ? "border-red-200 dark:border-red-800" : "border-gray-200 dark:border-white/[0.05] hover:border-gray-300 dark:hover:border-gray-600"}`} style={{ animationDelay: "0.3s", animationFillMode: "forwards" }}>
+              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                   Pipeline Settings
                 </h2>
-                <p className="text-xs text-gray-500 mt-0.5">Configure applicant intake limits</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Configure applicant intake limits</p>
               </div>
               <div className="p-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-900 mb-1.5">
+                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                     Applicant Limit
                   </label>
                   <input
                     ref={submissionCapInputRef}
                     type="number"
                     min={1}
-                    className={`w-full px-4 py-2.5 border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-inset transition-all duration-200 ${error ? "border-red-300 focus:ring-red-500" : "border-gray-200 hover:border-gray-300"}`}
+                    className={`w-full px-4 py-2.5 border rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 ${error ? "border-red-300 dark:border-red-700 focus:ring-red-500" : "border-gray-200 dark:border-white/[0.1] hover:border-gray-300 dark:hover:border-gray-600"}`}
                     placeholder="e.g. 50"
                     value={form.submissionCap === undefined || form.submissionCap === "" ? "" : form.submissionCap}
                     onChange={(e) => {
@@ -628,7 +628,7 @@ function JDConfirmContent() {
                     }}
                     onBlur={() => setFocusedField(null)}
                   />
-                  <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
                     The intake link closes when the applicant limit is reached. Shortlisting unlocks after at least 60% of the limit is collected.
                   </p>
                 </div>
@@ -640,14 +640,14 @@ function JDConfirmContent() {
               <button
                 type="button"
                 onClick={() => router.push("/user/dashboard")}
-                className="flex-1 sm:flex-none px-6 py-3 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 hover:border-gray-300 transition-all duration-200 active:scale-[0.98]"
+                className="flex-1 sm:flex-none px-6 py-3 border border-gray-200 dark:border-white/[0.1] text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-200 active:scale-[0.98]"
               >
                 Cancel
               </button>
               <button
                 onClick={handleContinue}
                 disabled={saving}
-                className="flex-1 sm:flex-auto px-6 py-3 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98] relative overflow-hidden group"
+                className="flex-1 sm:flex-auto px-6 py-3 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98] relative overflow-hidden group"
               >
                 <span className="relative z-10 flex items-center justify-center gap-2">
                   {saving ? (
@@ -668,7 +668,7 @@ function JDConfirmContent() {
                   )}
                 </span>
                 {!saving && (
-                  <span className="absolute inset-0 bg-gradient-to-r from-gray-800 to-gray-900 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
+                  <span className="absolute inset-0 bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-200 dark:to-gray-100 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
                 )}
               </button>
             </div>
@@ -682,10 +682,10 @@ function JDConfirmContent() {
 export default function JDConfirmPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="min-h-screen bg-white transition-colors duration-300 flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-900 mb-4"></div>
-          <p className="text-sm text-gray-600 animate-pulse-subtle">Loading…</p>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
         </div>
       </div>
     }>

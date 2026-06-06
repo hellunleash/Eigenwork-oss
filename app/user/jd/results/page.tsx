@@ -57,7 +57,7 @@ function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistributio
   return (
     <div className="mb-6 w-full">
       <div
-        className="relative h-8 w-full min-h-[2rem] rounded-xl overflow-hidden ring-1 ring-inset ring-gray-200/90 shadow-inner bg-gray-100/90"
+        className="relative h-8 w-full min-h-[2rem] rounded-xl overflow-hidden ring-1 ring-inset ring-gray-200/90 dark:ring-gray-700/90 shadow-inner bg-gray-100/90 dark:bg-gray-800/90"
         role="img"
         aria-label={`ETI pool for this job (${total} applicants). Four bands; column width grows with count but empty bands stay visible. Fill height is share of pool in each band: ${ariaBands}`}
       >
@@ -66,7 +66,7 @@ function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistributio
           style={{ backgroundImage: continuousGradient, opacity: 0.22 }}
           aria-hidden
         />
-        <div className="relative flex h-full w-full divide-x divide-white/30">
+        <div className="relative flex h-full w-full divide-x divide-white/30 dark:divide-white/20">
           {buckets.map((b, i) => {
             const sharePct = total > 0 ? (b.count / total) * 100 : 0;
             const leftPx = i === 0 ? 0 : segmentBoundaryPct[i - 1];
@@ -115,15 +115,15 @@ function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistributio
               style={{ flex: `${flexWeights[i]} 1 0%` }}
               title={`${etiBucketRangeLabel(i)}: ${b.count} applicant${b.count !== 1 ? "s" : ""} (${pctRounded}% of pool); ~${wPct}% of bar width`}
             >
-              <div className="truncate font-medium text-gray-700">{etiBucketRangeLabel(i)}</div>
-              <div className={b.count === 0 ? "truncate text-gray-300" : "truncate text-gray-500"}>
+              <div className="truncate font-medium text-gray-700 dark:text-gray-300">{etiBucketRangeLabel(i)}</div>
+              <div className={b.count === 0 ? "truncate text-gray-300 dark:text-gray-600" : "truncate text-gray-500 dark:text-gray-400"}>
                 {b.count} ({pctRounded}%)
               </div>
             </div>
           );
         })}
       </div>
-      <div className="relative mt-1 h-4 w-full text-[10px] text-gray-400 tabular-nums select-none">
+      <div className="relative mt-1 h-4 w-full text-[10px] text-gray-400 dark:text-gray-500 tabular-nums select-none">
         <span className="absolute left-0 top-0">{ETI_AXIS_BAND_START[0]}</span>
         {[1, 2, 3].map((i) => (
           <span
@@ -141,27 +141,27 @@ function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistributio
 }
 
 function getTrustLabel(score: number): { text: string; className: string } {
-  if (score >= 80) return { text: "Very High Trust", className: "bg-teal-100 text-teal-700" };
-  if (score >= 65) return { text: "High Trust", className: "bg-green-100 text-green-700" };
-  if (score >= 50) return { text: "Medium Trust", className: "bg-yellow-100 text-yellow-700" };
-  return { text: "Low Trust", className: "bg-red-100 text-red-700" };
+  if (score >= 80) return { text: "Very High Trust", className: "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" };
+  if (score >= 65) return { text: "High Trust", className: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" };
+  if (score >= 50) return { text: "Medium Trust", className: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" };
+  return { text: "Low Trust", className: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" };
 }
 
 function ResultsNavBar() {
   const router = useRouter();
   return (
-    <nav className="sticky top-0 z-40 border-b border-gray-200/80 bg-white/80 backdrop-blur-md transition-all duration-300">
+    <nav className="sticky top-0 z-40 border-b border-gray-200/80 dark:border-white/[0.1] bg-white/80 dark:bg-[#0a0a0e]/80 backdrop-blur-md transition-all duration-300">
       <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
         <button
           onClick={() => router.push("/user/dashboard")}
-          className="text-sm text-gray-600 hover:text-gray-900 transition-all duration-200 flex items-center gap-1.5 group hover:gap-2"
+          className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-all duration-200 flex items-center gap-1.5 group hover:gap-2"
         >
           <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
           Back to dashboard
         </button>
-        <span className="text-lg font-semibold tracking-tight text-gray-900">EigenWork</span>
+        <span className="text-lg font-semibold tracking-tight text-gray-900 dark:text-gray-100">EigenWork</span>
         <div className="w-20" />
       </div>
     </nav>
@@ -183,31 +183,31 @@ function WeakPoolBanner({
     : `${weakPool.pctBelowThreshold}% of applicants are below the contributor threshold (ETI 65). The pool lacks strong-fit candidates.`;
 
   return (
-    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 relative">
+    <div className="mb-6 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-4 relative">
       <button
         type="button"
         onClick={onDismiss}
-        className="absolute top-3 right-3 text-amber-400 hover:text-amber-600 transition-colors"
+        className="absolute top-3 right-3 text-amber-400 dark:text-amber-500 hover:text-amber-600 dark:hover:text-amber-300 transition-colors"
         aria-label="Dismiss"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      <h3 className="text-sm font-semibold text-amber-900 mb-1">Weak Candidate Pool</h3>
-      <p className="text-sm text-amber-800 mb-4 pr-6">{body}</p>
+      <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">Weak Candidate Pool</h3>
+      <p className="text-sm text-amber-800 dark:text-amber-300 mb-4 pr-6">{body}</p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={onStartNewIntake}
-          className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+          className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
         >
           Start New Intake
         </button>
         <button
           type="button"
           onClick={onDismiss}
-          className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          className="px-4 py-2 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
         >
           Keep This Pool
         </button>
@@ -228,12 +228,12 @@ function NewIntakeModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">Start New Intake</h3>
-        <p className="text-sm text-gray-600 mb-2">
+      <div className="relative bg-white dark:bg-white/[0.02] rounded-xl shadow-xl dark:shadow-none w-full max-w-md mx-4 p-6">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Start New Intake</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
           You can start collecting a new set of applicants.
         </p>
-        <p className="text-xs text-gray-400 mb-6">
+        <p className="text-xs text-gray-400 dark:text-gray-500 mb-6">
           No additional cost. Credits used for this pool will be restored.
         </p>
         <div className="flex justify-end gap-2">
@@ -241,7 +241,7 @@ function NewIntakeModal({
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+            className="px-4 py-2 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
@@ -249,7 +249,7 @@ function NewIntakeModal({
             type="button"
             onClick={onConfirm}
             disabled={isSubmitting}
-            className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             {isSubmitting ? "Starting…" : "Confirm"}
           </button>
@@ -333,10 +333,10 @@ function JDResultsContent() {
 
   if (!jobId) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col">
         <ResultsNavBar />
         <div className="flex-1 flex flex-col items-center justify-center p-4">
-          <p className="text-gray-600 text-sm">Missing jobId in URL. Use /user/jd/results?jobId=...</p>
+          <p className="text-gray-600 dark:text-gray-400 text-sm">Missing jobId in URL. Use /user/jd/results?jobId=...</p>
         </div>
       </div>
     );
@@ -344,10 +344,10 @@ function JDResultsContent() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col">
         <ResultsNavBar />
         <div className="flex-1 flex flex-col items-center justify-center">
-          <p className="text-gray-500 text-sm">Loading results…</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">Loading results…</p>
         </div>
       </div>
     );
@@ -355,14 +355,14 @@ function JDResultsContent() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col">
         <ResultsNavBar />
         <div className="flex-1 flex flex-col items-center justify-center p-4">
-          <p className="text-red-600 text-sm mb-4">{error}</p>
+          <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>
           <button
             type="button"
             onClick={() => revalidate()}
-            className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
+            className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200"
           >
             Retry
           </button>
@@ -373,26 +373,26 @@ function JDResultsContent() {
 
   if (top10.length === 0 && etiDistribution.total === 0) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col">
         <ResultsNavBar />
         <div className="flex-1 flex flex-col items-center justify-center p-4">
-          <p className="text-gray-600 text-sm text-center">No applicants in the pool for this job yet.</p>
+          <p className="text-gray-600 dark:text-gray-400 text-sm text-center">No applicants in the pool for this job yet.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen transition-colors duration-300 flex flex-col">
       <ResultsNavBar />
       <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-8 sm:px-6">
         <div className="flex items-center justify-between mb-6 gap-3">
-          <h1 className="text-xl font-semibold text-gray-900">Pipeline Results</h1>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Pipeline Results</h1>
           {top10.length > 0 && (
             <button
               type="button"
               onClick={exportCsv}
-              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 shrink-0"
+              className="px-3 py-1.5 border border-gray-300 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 shrink-0"
             >
               Export CSV
             </button>
@@ -414,7 +414,7 @@ function JDResultsContent() {
           />
         )}
         {top10.length === 0 ? (
-          <p className="text-gray-600 text-sm text-center py-4">
+          <p className="text-gray-600 dark:text-gray-400 text-sm text-center py-4">
             No matching candidates passed the filters (role fit, ETI ≥ 50, and work authorization).
           </p>
         ) : (
@@ -434,33 +434,33 @@ function JDResultsContent() {
             return (
               <li
                 key={c.id}
-                className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+                className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm dark:shadow-none overflow-hidden"
               >
                 <div className="p-4">
                   <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span className="text-lg font-bold text-gray-900">ETI {c.score}</span>
+                    <span className="text-lg font-bold text-gray-900 dark:text-gray-100">ETI {c.score}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${trust.className}`}>
                       {trust.text}
                     </span>
                     {c.yoe != null && (
-                      <span className="text-sm text-gray-500">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
                         {c.yoe} yr{c.yoe !== 1 ? "s" : ""} exp
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500 mb-2 flex flex-row flex-wrap items-center gap-x-1 gap-y-0">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2 flex flex-row flex-wrap items-center gap-x-1 gap-y-0">
                     {identityLine}
                   </p>
-                  <p className="text-sm font-medium text-gray-700 truncate max-w-full mb-2">
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate max-w-full mb-2">
                     {roleFit}
                   </p>
-                  <p className="text-sm text-gray-500 mb-3">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
                     {location} • {workTypes} • {workAuth}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <a
                       href={jobId ? `/user/candidatecard/${encodeURIComponent(c.id)}?jobId=${encodeURIComponent(jobId)}` : `/candidate/dashboard?id=${encodeURIComponent(c.id)}`}
-                      className="inline-flex items-center px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
+                      className="inline-flex items-center px-3 py-1.5 bg-gray-900 dark:bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-indigo-700"
                     >
                       View Candidate Card
                     </a>
@@ -492,7 +492,7 @@ function JDResultsContent() {
                           // last-resort fallback above.
                         }
                       }}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                     >
                       Download Resume ⬇
                     </button>
@@ -511,7 +511,7 @@ function JDResultsContent() {
 
 export default function JDResultsPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center"><p className="text-gray-500 text-sm">Loading…</p></div>}>
+    <Suspense fallback={<div className="min-h-screen transition-colors duration-300 flex flex-col items-center justify-center"><p className="text-gray-500 dark:text-gray-400 text-sm">Loading…</p></div>}>
       <JDResultsContent />
     </Suspense>
   );

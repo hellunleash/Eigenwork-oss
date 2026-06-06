@@ -34,9 +34,9 @@ const swrFetcher = (url: string) =>
   });
 
 const ROLE_PILL: Record<Role, string> = {
-  owner: "bg-gray-900 text-white",
-  admin: "bg-indigo-100 text-indigo-800",
-  member: "bg-gray-100 text-gray-700",
+  owner: "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900",
+  admin: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
+  member: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
 };
 
 export default function TeamPage() {
@@ -144,21 +144,21 @@ export default function TeamPage() {
   const isTeam = plan === "team";
 
   if (authChecking) {
-    return <div className="min-h-screen bg-gray-50" />;
+    return <div className="min-h-screen transition-colors duration-300" />;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen transition-colors duration-300">
       {/* Header */}
-      <div className="border-b border-gray-200 bg-white">
+      <div className="border-b border-gray-200 dark:border-white/[0.05] bg-white dark:bg-[#0a0a0e]/80 dark:backdrop-blur-md sticky top-0 z-30 transition-colors duration-300">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Link href="/user/dashboard" className="text-sm text-gray-500 hover:text-gray-800">
+            <Link href="/user/dashboard" className="text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200">
               ← Dashboard
             </Link>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Team</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight dark:text-gray-100">Team</h1>
           </div>
-          <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium capitalize">
+          <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium capitalize dark:bg-gray-800 dark:text-gray-200">
             {plan ? plan.replace("_", " ") : "Free"} plan
           </span>
         </div>
@@ -166,23 +166,23 @@ export default function TeamPage() {
 
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
         {error && (
-          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 dark:text-red-400 dark:bg-red-950/40 dark:border-red-800">
             {error}
           </div>
         )}
 
         {/* Plan gate */}
         {!isTeam && !loading && (
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1">Bring your team</h2>
-            <p className="text-sm text-gray-600 mb-4">
+          <div className="bg-white border border-gray-200 rounded-xl p-6 dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
+            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100">Bring your team</h2>
+            <p className="text-sm text-gray-600 mb-4 dark:text-gray-400">
               The Team plan adds a shared workspace — invite teammates as Admins or Members so
               everyone reviews the same candidate pipelines. You&apos;re currently on the{" "}
               <span className="font-medium">{plan ? plan.replace("_", " ") : "Free"}</span> plan.
             </p>
             <Link
               href="/user/dashboard"
-              className="inline-block px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
+              className="inline-block px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
             >
               Upgrade to Team
             </Link>
@@ -191,9 +191,9 @@ export default function TeamPage() {
 
         {/* Invite */}
         {isTeam && canManage && (
-          <section className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1">Invite a teammate</h2>
-            <p className="text-sm text-gray-600 mb-4">
+          <section className="bg-white border border-gray-200 rounded-xl p-6 dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
+            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100">Invite a teammate</h2>
+            <p className="text-sm text-gray-600 mb-4 dark:text-gray-400">
               They&apos;ll get a link to join with their Google account. The invite is locked to
               the email you enter.
             </p>
@@ -203,12 +203,12 @@ export default function TeamPage() {
                 placeholder="teammate@company.com"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm dark:border-white/[0.1] dark:text-gray-100 dark:bg-white/[0.02]"
               />
               <select
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as "member" | "admin")}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm bg-white"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm bg-white dark:border-white/[0.1] dark:text-gray-100 dark:bg-white/[0.02]"
               >
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
@@ -217,18 +217,18 @@ export default function TeamPage() {
                 type="button"
                 disabled={busy === "invite"}
                 onClick={handleInvite}
-                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
               >
                 {busy === "invite" ? "Creating…" : "Create invite"}
               </button>
             </div>
             {lastInviteLink && (
-              <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                <code className="text-xs text-emerald-900 truncate flex-1">{lastInviteLink}</code>
+              <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 dark:bg-emerald-950/40 dark:border-emerald-800">
+                <code className="text-xs text-emerald-900 truncate flex-1 dark:text-emerald-200">{lastInviteLink}</code>
                 <button
                   type="button"
                   onClick={() => navigator.clipboard.writeText(lastInviteLink)}
-                  className="text-xs font-medium text-emerald-800 hover:text-emerald-900 shrink-0"
+                  className="text-xs font-medium text-emerald-800 hover:text-emerald-900 shrink-0 dark:text-emerald-300 dark:hover:text-emerald-200"
                 >
                   Copy
                 </button>
@@ -238,29 +238,29 @@ export default function TeamPage() {
         )}
 
         {/* Members */}
-        <section className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">
+        <section className="bg-white border border-gray-200 rounded-xl overflow-hidden dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-white/[0.05]">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
               Members {loading ? "" : `(${members.length})`}
             </h2>
           </div>
           {loading ? (
             <div className="p-6 space-y-3">
               {[0, 1].map((i) => (
-                <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse" />
+                <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse dark:bg-gray-800" />
               ))}
             </div>
           ) : (
-            <ul className="divide-y divide-gray-100">
+            <ul className="divide-y divide-gray-100 dark:divide-white/[0.05]">
               {members.map((mem) => (
                 <li key={mem.uid} className="px-6 py-4 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
+                    <p className="text-sm font-medium text-gray-900 truncate dark:text-gray-100">
                       {mem.name || mem.email || mem.uid}
-                      {mem.isYou && <span className="ml-2 text-xs text-gray-400">(you)</span>}
+                      {mem.isYou && <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">(you)</span>}
                     </p>
                     {mem.email && mem.name && (
-                      <p className="text-xs text-gray-500 truncate">{mem.email}</p>
+                      <p className="text-xs text-gray-500 truncate dark:text-gray-400">{mem.email}</p>
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -274,7 +274,7 @@ export default function TeamPage() {
                             type="button"
                             disabled={busy === mem.uid}
                             onClick={() => manage("role", mem.uid, mem.role === "admin" ? "member" : "admin")}
-                            className="text-xs text-gray-600 hover:text-gray-900 disabled:opacity-50"
+                            className="text-xs text-gray-600 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-100"
                           >
                             {mem.role === "admin" ? "Make member" : "Make admin"}
                           </button>
@@ -284,7 +284,7 @@ export default function TeamPage() {
                             type="button"
                             disabled={busy === mem.uid}
                             onClick={() => manage("remove", mem.uid)}
-                            className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50"
+                            className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
                           >
                             Remove
                           </button>
@@ -300,21 +300,21 @@ export default function TeamPage() {
 
         {/* Pending invites */}
         {isTeam && canManage && invites.length > 0 && (
-          <section className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Pending invites ({invites.length})</h2>
+          <section className="bg-white border border-gray-200 rounded-xl overflow-hidden dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-white/[0.05]">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Pending invites ({invites.length})</h2>
             </div>
-            <ul className="divide-y divide-gray-100">
+            <ul className="divide-y divide-gray-100 dark:divide-white/[0.05]">
               {invites.map((inv) => (
                 <li key={inv.token} className="px-6 py-4 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{inv.email}</p>
-                    <p className="text-xs text-gray-500 capitalize">{inv.role} · awaiting acceptance</p>
+                    <p className="text-sm font-medium text-gray-900 truncate dark:text-gray-100">{inv.email}</p>
+                    <p className="text-xs text-gray-500 capitalize dark:text-gray-400">{inv.role} · awaiting acceptance</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => copy(inv.token)}
-                    className="text-xs font-medium text-gray-700 hover:text-gray-900 shrink-0"
+                    className="text-xs font-medium text-gray-700 hover:text-gray-900 shrink-0 dark:text-gray-300 dark:hover:text-gray-100"
                   >
                     {copied === inv.token ? "Copied!" : "Copy link"}
                   </button>

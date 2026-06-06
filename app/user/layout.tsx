@@ -6,7 +6,17 @@ import { signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { SWRProvider } from "@/lib/swr-config";
+import useSWR from "swr";
 import { UserSidebar } from "./UserSidebar";
+
+const fetcher = async (url: string) => {
+  const token = await getIdTokenOrNull();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) throw new Error("Failed to fetch");
+  return res.json();
+};
 
 /**
  * Authenticated employer shell. Renders the global sidebar on every /user page
@@ -26,8 +36,6 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
 
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [me, setMe] = useState<Me | null>(null);
-  const [orgs, setOrgs] = useState<Org[]>([]);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -41,30 +49,9 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     return () => unsub();
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    let active = true;
-    (async () => {
-      try {
-        const token = await getIdTokenOrNull();
-        const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-        const [meRes, orgRes] = await Promise.all([
-          fetch("/api/user/me", { headers }),
-          fetch("/api/org/list", { headers }),
-        ]);
-        if (active && meRes.ok) setMe(await meRes.json());
-        if (active && orgRes.ok) {
-          const d = await orgRes.json();
-          if (Array.isArray(d.orgs)) setOrgs(d.orgs);
-        }
-      } catch {
-        /* sidebar falls back to defaults */
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [user, pathname]);
+  const { data: me } = useSWR<Me>(user ? "/api/user/me" : null, fetcher);
+  const { data: orgData } = useSWR<{ orgs: Org[] }>(user ? "/api/org/list" : null, fetcher);
+  const orgs = orgData?.orgs || [];
 
   const toggleSidebar = () =>
     setCollapsed((c) => {
@@ -101,7 +88,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
   return (
     <SWRProvider>
       <div
-        className={`min-h-screen bg-gray-50 dark:bg-gray-950 transition-[padding] duration-200 ${
+        className={`min-h-screen bg-gray-50 dark:bg-[#0a0a0e] dark:bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.15),rgba(255,255,255,0))] transition-[padding] duration-200 ${
           collapsed ? "pl-12" : "pl-60"
         }`}
       >

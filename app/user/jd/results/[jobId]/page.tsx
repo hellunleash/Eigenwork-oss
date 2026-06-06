@@ -18,8 +18,8 @@ export default function UserJDResultsPage() {
   }, [jobId, router]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-500 text-sm">Loading…</p>
+    <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
+      <p className="text-gray-500 dark:text-gray-400 text-sm">Loading…</p>
     </div>
   );
 }

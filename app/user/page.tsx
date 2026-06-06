@@ -12,8 +12,8 @@ export default function UserIndexPage() {
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-500 text-sm">Redirecting…</p>
+    <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
+      <p className="text-gray-500 dark:text-gray-400 text-sm">Redirecting…</p>
     </div>
   );
 }

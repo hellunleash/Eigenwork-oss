@@ -17,63 +17,19 @@ export default function MatchPage() {
 
   if (loading) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif",
-        }}
-      >
-        <p style={{ color: "#6b7280" }}>Loading...</p>
+      <div className="min-h-screen flex items-center justify-center transition-colors duration-300">
+        <p className="text-gray-500 dark:text-gray-400 text-sm">Loading...</p>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#fafafa",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "40px 24px",
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "640px",
-          background: "white",
-          borderRadius: "12px",
-          border: "1px solid #e5e7eb",
-          padding: "48px",
-          boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
-          textAlign: "center",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "24px",
-            fontWeight: "600",
-            marginBottom: "16px",
-            color: "#111827",
-            letterSpacing: "-0.025em",
-          }}
-        >
+    <div className="min-h-screen transition-colors duration-300 flex items-center justify-center px-6 py-10">
+      <div className="w-full max-w-2xl bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] p-12 shadow-sm text-center">
+        <h1 className="text-2xl font-semibold mb-4 text-gray-900 dark:text-gray-100 tracking-tight">
           Matching candidates...
         </h1>
-        <p
-          style={{
-            fontSize: "14px",
-            color: "#6b7280",
-            margin: 0,
-            lineHeight: "1.5",
-          }}
-        >
+        <p className="text-sm text-gray-500 dark:text-gray-400 m-0 leading-relaxed">
           {jd ? `Finding matches for: ${String(jd.title ?? "") || "your role"}` : "No job description found"}
         </p>
       </div>

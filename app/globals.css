@@ -2,11 +2,11 @@
 
 /* Class-based dark mode: `dark:` utilities apply when an ancestor (the <html>
    element, toggled in Settings) has the `dark` class. */
-@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
 }
 
 @theme inline {
@@ -16,17 +16,31 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #fafafc;
+  --foreground: #0f172a;
+}
+
+.dark {
+  --background: #0a0a0e;
+  --foreground: #f1f5f9;
+}
+
+.dark body {
+  background-color: var(--background);
+  background-image: radial-gradient(ellipse 80% 80% at 50% -20%, rgba(120, 119, 198, 0.15), rgba(255, 255, 255, 0));
+  background-attachment: fixed;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
+  background-image: radial-gradient(ellipse 80% 80% at 50% -20%, rgba(120, 119, 198, 0.06), rgba(255, 255, 255, 0));
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 @keyframes fade-in-up {

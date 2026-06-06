@@ -46,7 +46,7 @@ export function UserSidebar(props: {
   // never sit under the toggle.
   if (collapsed) {
     return (
-      <aside className="fixed left-0 top-0 bottom-0 w-12 border-r border-gray-200 bg-white flex flex-col items-center py-4 z-30 dark:bg-gray-900 dark:border-gray-800">
+      <aside className="fixed left-0 top-0 bottom-0 w-12 border-r border-gray-200 bg-white flex flex-col items-center py-4 z-30 dark:bg-[#0a0a0e]/80 dark:backdrop-blur-xl dark:border-white/[0.05]">
         <button
           type="button"
           onClick={onToggle}
@@ -60,7 +60,7 @@ export function UserSidebar(props: {
   }
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-60 border-r border-gray-200 bg-white flex flex-col z-30 dark:bg-gray-900 dark:border-gray-800">
+    <aside className="fixed left-0 top-0 bottom-0 w-60 border-r border-gray-200 bg-white flex flex-col z-30 dark:bg-[#0a0a0e]/80 dark:backdrop-blur-xl dark:border-white/[0.05]">
       {/* Brand + collapse */}
       <div className="px-4 py-4 flex items-center justify-between">
         <Link href="/user/dashboard" className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">
@@ -82,11 +82,11 @@ export function UserSidebar(props: {
           <select
             value={activeOrgId ?? ""}
             onChange={(e) => onSwitchOrg(e.target.value)}
-            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-lg text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200"
+            className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-lg text-sm dark:bg-[#121218] dark:border-white/[0.05] dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
             title="Switch workspace"
           >
             {orgs.map((o) => (
-              <option key={o.orgId} value={o.orgId}>
+              <option key={o.orgId} value={o.orgId} className="bg-white dark:bg-[#121218] text-gray-900 dark:text-gray-200">
                 {o.name}
               </option>
             ))}
@@ -104,14 +104,14 @@ export function UserSidebar(props: {
       </nav>
 
       {/* Screens remaining */}
-      <div className="mx-2 mb-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700">
+      <div className="mx-2 mb-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 dark:bg-white/[0.02] dark:border-white/[0.05]">
         <p className="text-xs text-gray-500 dark:text-gray-400">Screens remaining</p>
         <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{screensRemaining.toLocaleString()}</p>
       </div>
 
       {/* User + tier */}
-      <div className="border-t border-gray-200 dark:border-gray-800 px-3 py-3 flex items-center gap-2">
-        <div className="w-8 h-8 rounded-full bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 flex items-center justify-center text-xs font-semibold shrink-0">
+      <div className="border-t border-gray-200 dark:border-white/[0.05] px-3 py-3 flex items-center gap-2">
+        <div className="w-8 h-8 rounded-full bg-gray-900 text-white dark:bg-white/[0.05] dark:text-gray-100 flex items-center justify-center text-xs font-semibold shrink-0">
           {initials}
         </div>
         <div className="min-w-0 flex-1">
@@ -144,8 +144,8 @@ function SidebarLink({ href, label, active }: { href: string; label: string; act
       href={href}
       className={`block px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
         active
-          ? "bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100"
-          : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+          ? "bg-gray-100 text-gray-900 dark:bg-white/[0.08] dark:text-gray-100 shadow-sm dark:shadow-none"
+          : "text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.04] dark:hover:text-gray-200"
       }`}
     >
       {label}

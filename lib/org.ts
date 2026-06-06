@@ -43,6 +43,14 @@ function asRole(value: unknown): OrgRole | null {
 export async function ensurePersonalOrg(userId: string): Promise<string> {
   const db = getAdminDb();
   const userOrgRef = db.collection(USER_ORGS_COLLECTION).doc(userId);
+  
+  // Fast path: avoid transaction overhead on every request
+  const fastSnap = await userOrgRef.get();
+  const fastData = fastSnap.data();
+  if (fastData && typeof fastData.activeOrgId === "string" && fastData.activeOrgId) {
+    return fastData.activeOrgId;
+  }
+
   // Auto-id is generated client-side (no round trip), so the org create can sit
   // inside the transaction alongside the userOrgs write.
   const newOrgRef = db.collection(ORGS_COLLECTION).doc();

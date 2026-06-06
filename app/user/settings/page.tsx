@@ -41,11 +41,11 @@ export default function SettingsPage() {
     return () => unsub();
   }, [router]);
 
-  if (authChecking) return <div className="min-h-screen bg-gray-50 dark:bg-gray-950" />;
+  if (authChecking) return <div className="min-h-screen transition-colors duration-300" />;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      <div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+    <div className="min-h-screen transition-colors duration-300">
+      <div className="border-b border-gray-200 dark:border-white/[0.05] bg-white dark:bg-[#0a0a0e]/80 dark:backdrop-blur-md sticky top-0 z-30 transition-colors duration-300">
         <div className="px-6 py-4">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Settings</h1>
         </div>
@@ -53,7 +53,7 @@ export default function SettingsPage() {
 
       <div className="max-w-2xl mx-auto px-6 py-8 space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Appearance</h2>
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 flex items-center justify-between gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none p-5 flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Dark mode</p>
             <p className="text-xs text-gray-500 dark:text-gray-400">Toggle between light and dark theme.</p>

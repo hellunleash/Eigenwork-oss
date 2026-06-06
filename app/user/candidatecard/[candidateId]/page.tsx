@@ -63,21 +63,21 @@ function UserCandidateCardContent() {
 
   if (loading || !data) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center text-gray-400 text-sm">
+      <div className="min-h-screen transition-colors duration-300 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
         {error ? (
           <>
             <p className="mb-2">{error}</p>
             {jobId ? (
               <Link
                 href={`/user/jd/results/${jobId}`}
-                className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm font-medium"
+                className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-md text-sm font-medium"
               >
                 Back to Results
               </Link>
             ) : (
               <Link
                 href="/user/dashboard"
-                className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm font-medium"
+                className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-md text-sm font-medium"
               >
                 Back to Dashboard
               </Link>
@@ -96,10 +96,10 @@ function UserCandidateCardContent() {
   const name = (data.candidateName as string) || "Candidate";
 
   const getTrustLabel = (s: number) => {
-    if (s >= 80) return { text: "Very High Trust", color: "bg-teal-100 text-teal-700" };
-    if (s >= 65) return { text: "High Trust", color: "bg-green-100 text-green-700" };
-    if (s >= 50) return { text: "Medium Trust", color: "bg-yellow-100 text-yellow-700" };
-    return { text: "Low Trust", color: "bg-red-100 text-red-700" };
+    if (s >= 80) return { text: "Very High Trust", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" };
+    if (s >= 65) return { text: "High Trust", color: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" };
+    if (s >= 50) return { text: "Medium Trust", color: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" };
+    return { text: "Low Trust", color: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" };
   };
 
   const trust = getTrustLabel(score);
@@ -116,17 +116,17 @@ function UserCandidateCardContent() {
   const backHref = jobId ? `/user/jd/results/${jobId}` : "/user/dashboard";
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
-      <div className="bg-white w-full max-w-xl shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+    <div className="min-h-screen transition-colors duration-300 flex items-center justify-center p-4 font-sans">
+      <div className="bg-white dark:bg-white/[0.02] w-full max-w-xl shadow-sm dark:shadow-none border border-gray-200 dark:border-white/[0.05] rounded-lg overflow-hidden">
         {/* HEADER */}
-        <div className="p-6 border-b border-gray-100 pb-4">
-          <h1 className="text-xl font-bold text-gray-900 mb-2">{name}</h1>
+        <div className="p-6 border-b border-gray-100 dark:border-white/[0.05] pb-4">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">{name}</h1>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="relative inline-flex items-center gap-2">
-              <span className="text-2xl font-bold text-gray-900">ETI: {score}</span>
+              <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">ETI: {score}</span>
             </div>
             {yoe != null && (
-              <span className="text-gray-600 text-sm">
+              <span className="text-gray-600 dark:text-gray-400 text-sm">
                 {yoe} year{yoe !== 1 ? "s" : ""} experience
               </span>
             )}
@@ -137,7 +137,7 @@ function UserCandidateCardContent() {
                   onClick={() => setShowEtiTooltip((v) => !v)}
                   onMouseEnter={() => setShowEtiTooltip(true)}
                   onMouseLeave={() => setShowEtiTooltip(false)}
-                  className="inline-flex items-center justify-center w-5 h-5 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors duration-200"
+                  className="inline-flex items-center justify-center w-5 h-5 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors duration-200"
                   aria-label="ETI scale information"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
@@ -181,7 +181,7 @@ function UserCandidateCardContent() {
 
         {/* OPERATING PROFILE */}
         <div className="p-6 pt-4">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-4">
+          <h3 className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-4">
             Operating Profile
           </h3>
           <div className="space-y-4">
@@ -204,24 +204,24 @@ function UserCandidateCardContent() {
 
         {/* ROLE FIT */}
         <div className="p-6 pt-2">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Role Fit</h3>
-          <span className="inline-block bg-blue-50 text-blue-600 px-3 py-1 rounded text-sm font-medium border border-blue-100">
+          <h3 className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Role Fit</h3>
+          <span className="inline-block bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 px-3 py-1 rounded text-sm font-medium border border-blue-100 dark:border-blue-800">
             {roleFitDisplay}
           </span>
         </div>
 
         {/* RISK FLAGS */}
         <div className="p-6 pt-2">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Risk Flags</h3>
+          <h3 className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Risk Flags</h3>
           <div className="flex flex-wrap gap-2">
             {Array.isArray(profile.risk_flags) && profile.risk_flags.length > 0 && profile.risk_flags[0] !== "None" ? (
               (profile.risk_flags as string[]).map((flag: string, i: number) => (
-                <span key={i} className="px-3 py-1 bg-gray-100 text-gray-600 rounded text-sm font-medium">
+                <span key={i} className="px-3 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded text-sm font-medium">
                   {flag}
                 </span>
               ))
             ) : (
-              <span className="px-3 py-1 bg-gray-50 text-gray-500 rounded text-sm font-medium border border-gray-100">
+              <span className="px-3 py-1 transition-colors duration-300 text-gray-500 dark:text-gray-400 rounded text-sm font-medium border border-gray-100 dark:border-white/[0.05]">
                 None
               </span>
             )}
@@ -229,10 +229,10 @@ function UserCandidateCardContent() {
         </div>
 
         {/* BACK TO RESULTS */}
-        <div className="p-6 pt-4 pb-8 border-t border-gray-100">
+        <div className="p-6 pt-4 pb-8 border-t border-gray-100 dark:border-white/[0.05]">
           <Link
             href={backHref}
-            className="block w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors text-center"
+            className="block w-full py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors text-center"
           >
             Back to Results
           </Link>
@@ -244,7 +244,7 @@ function UserCandidateCardContent() {
 
 export default function UserCandidateCardPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400 text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="min-h-screen transition-colors duration-300 flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">Loading…</div>}>
       <UserCandidateCardContent />
     </Suspense>
   );
@@ -261,19 +261,19 @@ function ProfileRow({
 }) {
   if (!value) return null;
   const valLower = value.toLowerCase();
-  let badgeColor = "bg-gray-100 text-gray-700";
+  let badgeColor = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
   if (inverse) {
-    if (valLower === "low") badgeColor = "bg-green-50 text-green-700";
-    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700";
-    else if (valLower === "high") badgeColor = "bg-red-50 text-red-700";
+    if (valLower === "low") badgeColor = "bg-green-50 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+    else if (valLower === "high") badgeColor = "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300";
   } else {
-    if (valLower === "high") badgeColor = "bg-green-50 text-green-700";
-    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700";
-    else if (valLower === "low") badgeColor = "bg-red-50 text-red-700";
+    if (valLower === "high") badgeColor = "bg-green-50 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+    else if (valLower === "low") badgeColor = "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300";
   }
   return (
-    <div className="flex justify-between items-center border-b border-gray-50 last:border-0 pb-2 last:pb-0">
-      <span className="text-gray-600 text-sm">{label}</span>
+    <div className="flex justify-between items-center border-b border-gray-50 dark:border-white/[0.05] last:border-0 pb-2 last:pb-0">
+      <span className="text-gray-600 dark:text-gray-400 text-sm">{label}</span>
       <span className={`px-3 py-1 rounded-md text-sm font-medium ${badgeColor}`}>{value}</span>
     </div>
   );
@@ -293,28 +293,28 @@ function ProfileRowWithReason({
   const [expanded, setExpanded] = useState(false);
   if (!value) return null;
   const valLower = value.toLowerCase();
-  let badgeColor = "bg-gray-100 text-gray-700";
+  let badgeColor = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
   if (inverse) {
-    if (valLower === "low") badgeColor = "bg-green-50 text-green-700";
-    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700";
-    else if (valLower === "high") badgeColor = "bg-red-50 text-red-700";
+    if (valLower === "low") badgeColor = "bg-green-50 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+    else if (valLower === "high") badgeColor = "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300";
   } else {
-    if (valLower === "high") badgeColor = "bg-green-50 text-green-700";
-    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700";
-    else if (valLower === "low") badgeColor = "bg-red-50 text-red-700";
+    if (valLower === "high") badgeColor = "bg-green-50 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+    else if (valLower === "medium") badgeColor = "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+    else if (valLower === "low") badgeColor = "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300";
   }
   const hasReason = Boolean(reason?.trim());
   return (
-    <div className="border-b border-gray-50 last:border-0 pb-2 last:pb-0">
+    <div className="border-b border-gray-50 dark:border-white/[0.05] last:border-0 pb-2 last:pb-0">
       <div className="flex justify-between items-center">
-        <span className="text-gray-600 text-sm">{label}</span>
+        <span className="text-gray-600 dark:text-gray-400 text-sm">{label}</span>
         <div className="flex items-center gap-1">
           <span className={`px-3 py-1 rounded-md text-sm font-medium ${badgeColor}`}>{value}</span>
           {hasReason && (
             <button
               type="button"
               onClick={() => setExpanded((e) => !e)}
-              className="p-0.5 rounded text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
+              className="p-0.5 rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none focus:ring-1 focus:ring-gray-300 dark:focus:ring-gray-600"
               aria-expanded={expanded}
             >
               <svg
@@ -331,7 +331,7 @@ function ProfileRowWithReason({
       </div>
       {hasReason && expanded && (
         <div className="mt-2 pl-0">
-          <div className="bg-gray-100 text-gray-600 text-sm rounded px-3 py-2 border border-gray-200">{reason}</div>
+          <div className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-sm rounded px-3 py-2 border border-gray-200 dark:border-white/[0.1]">{reason}</div>
         </div>
       )}
     </div>
