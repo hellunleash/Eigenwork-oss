@@ -113,6 +113,5 @@ export default function JDInputPage() {
         </div>
       </div>
     </div>
-    </div>
   );
 }
