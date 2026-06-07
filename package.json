@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "diagnose:github": "node scripts/diagnose-github.mjs",
     "serve": "npm run build && firebase emulators:start --only functions,hosting",
     "deploy": "firebase deploy"
   },

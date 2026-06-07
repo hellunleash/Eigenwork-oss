@@ -157,6 +157,24 @@ function releaseGithubSlot(): void {
 // Cap on rate-limit backoff so a stuck request can't pin a worker forever.
 const MAX_RATE_LIMIT_WAIT_MS = 60_000;
 
+// Transient-failure retry (separate from rate-limit). A 5xx or a network throw
+// on a single GitHub call used to fail the whole extraction (→ "Repo
+// inaccessible" → ESQ floored to 0). We now retry these a few times with
+// jittered exponential backoff. 404 and non-rate-limit 4xx are NOT retried —
+// they mean the resource genuinely isn't there (wrong branch/sha, renamed,
+// private), so retrying only wastes time.
+const MAX_GITHUB_ATTEMPTS = 3;
+const TRANSIENT_BACKOFF_MS = 800;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function transientBackoff(attempt: number): number {
+  const base = Math.min(MAX_RATE_LIMIT_WAIT_MS, TRANSIENT_BACKOFF_MS * 2 ** attempt);
+  return base + Math.floor(Math.random() * 250);
+}
+
 /**
  * If the response indicates a rate limit, sleep up to MAX_RATE_LIMIT_WAIT_MS
  * and return true so the caller can retry once. Otherwise return false.
@@ -233,32 +251,65 @@ async function githubGetJson(
   label: string
 ): Promise<Record<string, unknown> | null> {
   await acquireGithubSlot();
+  const path = url.split("?")[0];
   try {
-    let res = await rawGithubFetch(url, opts);
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < MAX_GITHUB_ATTEMPTS; attempt++) {
+      try {
+        const res = await rawGithubFetch(url, opts);
+        if (res.ok) return (await res.json()) as Record<string, unknown>;
+        lastStatus = res.status;
 
-    if (!res.ok) {
-      const slept = await maybeSleepForRateLimit(res, url);
-      if (slept) {
-        res = await rawGithubFetch(url, opts);
+        // 404 = genuinely absent (wrong branch/sha, renamed, private, or a bad
+        // owner/repo from URL parsing). Retrying can't help; fail fast.
+        if (res.status === 404) {
+          console.warn(`[getRepoDNA] GitHub 404 via ${label}: ${path}`);
+          return null;
+        }
+
+        // 403 / 429 = rate limit (primary or secondary) OR a plain forbidden.
+        if (res.status === 403 || res.status === 429) {
+          const slept = await maybeSleepForRateLimit(res, url);
+          if (slept) continue; // server told us how long to wait; retry
+          const body = await res.text().catch(() => "");
+          const rateLimited = /rate limit|rate_limit|abuse|secondary/i.test(body);
+          if (rateLimited && attempt < MAX_GITHUB_ATTEMPTS - 1) {
+            // Rate limited but no usable Retry-After/Reset header — back off.
+            await sleep(transientBackoff(attempt));
+            continue;
+          }
+          console.warn(
+            `[getRepoDNA] GitHub ${res.status}${rateLimited ? " (rate limit, no header)" : " (forbidden — token scope/private?)"} via ${label}: ${path}`
+          );
+          return null;
+        }
+
+        // 5xx = transient server-side error. Back off and retry.
+        if (res.status >= 500) {
+          if (attempt < MAX_GITHUB_ATTEMPTS - 1) {
+            await sleep(transientBackoff(attempt));
+            continue;
+          }
+          console.warn(`[getRepoDNA] GitHub ${res.status} (server) via ${label}: ${path}`);
+          return null;
+        }
+
+        // Any other 4xx is a client error we won't fix by retrying.
+        console.warn(`[getRepoDNA] GitHub ${res.status} via ${label}: ${path}`);
+        return null;
+      } catch (err) {
+        // Network / DNS / timeout throw — transient. Back off and retry.
+        if (attempt < MAX_GITHUB_ATTEMPTS - 1) {
+          await sleep(transientBackoff(attempt));
+          continue;
+        }
+        console.warn(`[getRepoDNA] GitHub fetch threw via ${label} (final):`, err);
+        return null;
       }
     }
-
-    if (!res.ok) {
-      if (res.status === 403 || res.status === 429) {
-        const body = await res.text().catch(() => "");
-        const rateLimited = /rate limit|rate_limit|abuse|secondary/i.test(body);
-        console.warn(
-          `[getRepoDNA] GitHub API ${res.status}${rateLimited ? " (rate limit)" : ""} via ${label}: ${url.split("?")[0]}`
-        );
-      } else {
-        console.warn(`[getRepoDNA] GitHub API failed (${res.status}) via ${label}: ${url.split("?")[0]}`);
-      }
-      return null;
-    }
-
-    return (await res.json()) as Record<string, unknown>;
-  } catch (err) {
-    console.warn(`[getRepoDNA] GitHub fetch threw via ${label}:`, err);
+    console.warn(
+      `[getRepoDNA] GitHub exhausted ${MAX_GITHUB_ATTEMPTS} attempts via ${label} (last status ${lastStatus}): ${path}`
+    );
     return null;
   } finally {
     releaseGithubSlot();
@@ -279,29 +330,50 @@ async function githubFetchBlob(url: string): Promise<Record<string, unknown> | n
   return githubGetJson(url, { useNextCache: false }, "fetchBlob");
 }
 
-function parseGithubUrl(url: string): { owner: string; repo: string } | null {
+// Normalize the many shapes a candidate can paste into a github.com URL object:
+// missing scheme ("github.com/..."), "www." host, "http://", trailing slashes,
+// and "/tree/<branch>/..." deep links. Returns null for non-github hosts.
+function normalizeGithubUrl(raw: string): URL | null {
+  if (!raw || typeof raw !== "string") return null;
+  let s = raw.trim();
+  if (!s) return null;
+  // Add scheme if the user pasted a bare "github.com/owner/repo".
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s.replace(/^\/+/, "");
   try {
-    const urlObj = new URL(url);
-    if (urlObj.hostname !== "github.com") return null;
-    const parts = urlObj.pathname.split("/").filter(Boolean);
-    if (parts.length < 2) return null;
-    return { owner: parts[0], repo: parts[1] };
+    const u = new URL(s);
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    if (host !== "github.com") return null;
+    return u;
   } catch {
     return null;
   }
 }
 
+// Repos are commonly pasted with a ".git" suffix (clone URL); strip it.
+function stripDotGit(repo: string): string {
+  return repo.replace(/\.git$/i, "");
+}
+
+function parseGithubUrl(url: string): { owner: string; repo: string } | null {
+  // SSH clone form "git@github.com:owner/repo(.git)" — URL() can't parse it.
+  const ssh = (url || "").trim().match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  if (ssh) return { owner: ssh[1], repo: stripDotGit(ssh[2]) };
+
+  const u = normalizeGithubUrl(url);
+  if (!u) return null;
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  // parts[0]=owner, parts[1]=repo; any "/tree/<branch>/..." tail is ignored.
+  return { owner: parts[0], repo: stripDotGit(parts[1]) };
+}
+
 /** Returns { username } for profile URLs like https://github.com/waifuexists */
 function parseGithubUserUrl(url: string): { username: string } | null {
-  try {
-    const urlObj = new URL(url);
-    if (urlObj.hostname !== "github.com") return null;
-    const parts = urlObj.pathname.split("/").filter(Boolean);
-    if (parts.length !== 1) return null;
-    return { username: parts[0] };
-  } catch {
-    return null;
-  }
+  const u = normalizeGithubUrl(url);
+  if (!u) return null;
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length !== 1) return null;
+  return { username: parts[0] };
 }
 
 /**
@@ -456,12 +528,23 @@ export async function getRepoDNA(repoUrl: string): Promise<string | null> {
   const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
   const repoData = await githubFetch(baseUrl) as { default_branch?: string } | null;
-  if (!repoData) return null;
+  if (!repoData) {
+    // Distinguish this from "no code found": the repo metadata call itself
+    // failed (rate limit / transient / 404 / private). See githubGetJson logs
+    // above for the specific status.
+    console.warn(`[getRepoDNA] Repo metadata fetch failed for ${owner}/${repo} — see status log above.`);
+    return null;
+  }
 
   const defaultBranch = repoData.default_branch || "main";
 
   const treeUrl = `${baseUrl}/git/trees/${defaultBranch}?recursive=1`;
-  const treeData = await githubFetchNoCache(treeUrl) as { tree?: TreeEntry[] } | null;
+  const treeData = await githubFetchNoCache(treeUrl) as { tree?: TreeEntry[]; truncated?: boolean } | null;
+  if (treeData?.truncated) {
+    // GitHub caps recursive trees (~100k entries / ~7MB); on a very large repo
+    // the tail is dropped and core-file selection may miss real backend code.
+    console.warn(`[getRepoDNA] Tree truncated for ${owner}/${repo}; core-file selection may be incomplete.`);
+  }
   if (!treeData || !Array.isArray(treeData.tree)) {
     const commitUrl = `${baseUrl}/commits/${defaultBranch}`;
     const commitRes = await githubFetch(commitUrl);
