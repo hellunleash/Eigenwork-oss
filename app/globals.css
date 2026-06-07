@@ -19,11 +19,19 @@
 :root {
   --background: #fafafc;
   --foreground: #0f172a;
+  /* Declare the page palette so the browser renders NATIVE controls — <select>
+     option lists, <input type="number"> spinners, scrollbars, date pickers — in
+     the matching theme. Without this, dark-mode pages get a white option popup
+     with near-invisible text and a light number-scroller. Tied to `.dark` (our
+     dark-mode signal) below; `.dark` is later in source order so it wins when
+     present. */
+  color-scheme: light;
 }
 
 .dark {
   --background: #0a0a0e;
   --foreground: #f1f5f9;
+  color-scheme: dark;
 }
 
 .dark body {
