@@ -34,6 +34,21 @@
   color-scheme: dark;
 }
 
+/* Native <select> option lists are painted by the browser. color-scheme (above)
+   themes them in modern browsers, BUT an author background-color on a styled
+   <select> (e.g. Tailwind's bg-white/[0.02]) makes Chromium render the option
+   popup light — white menu, invisible text. Set the option/select colors
+   explicitly in dark mode so the dropdown list is always legible. The closed
+   <select> keeps its Tailwind styling (higher specificity); these rules govern
+   the popup items. */
+.dark select {
+  background-color: #0a0a0e;
+}
+.dark option {
+  background-color: #0a0a0e;
+  color: #f1f5f9;
+}
+
 .dark body {
   background-color: var(--background);
   background-image: radial-gradient(ellipse 80% 80% at 50% -20%, rgba(120, 119, 198, 0.15), rgba(255, 255, 255, 0));

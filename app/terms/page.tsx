@@ -22,26 +22,26 @@ export default function TermsPage() {
   const lastUpdated = "February 11, 2025";
   
   return (
-    <div className="min-h-screen bg-white py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-white dark:bg-[#0a0a0e] py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-900 mb-2">Terms of Service & Privacy Policy</h1>
-        <p className="text-sm text-gray-500 mb-8">Last updated: {lastUpdated}</p>
+        <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-2">Terms of Service & Privacy Policy</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-8">Last updated: {lastUpdated}</p>
 
         <div className="prose prose-sm max-w-none space-y-8">
           {/* TERMS OF SERVICE */}
           <section>
-            <h2 className="text-2xl font-semibold text-gray-900 mb-4">Terms of Service</h2>
+            <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Terms of Service</h2>
             
-            <div className="space-y-6 text-gray-700 leading-relaxed">
+            <div className="space-y-6 text-gray-700 dark:text-gray-300 leading-relaxed">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">1. Acceptance of Terms</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">1. Acceptance of Terms</h3>
                 <p>
                   These Terms of Service and Privacy Policy (&quot;Terms&quot;) are entered into between you (&quot;User&quot;, &quot;you&quot;, &quot;your&quot;) and EigenWork (&quot;EigenWork&quot;, &quot;we&quot;, &quot;us&quot;, &quot;our&quot;, &quot;Company&quot;). By accessing or using EigenWork (&quot;the Platform&quot;, &quot;Service&quot;), you agree to be bound by these Terms. If you do not agree, please do not use the Platform.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">2. Description of Service</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">2. Description of Service</h3>
                 <p>
                   EigenWork is a technical candidate evaluation platform designed for startups. The Platform enables users to:
                 </p>
@@ -57,14 +57,14 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">3. Account Creation and Authentication</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">3. Account Creation and Authentication</h3>
                 <p>
                   To use the Platform as a user, you must create an account using Google OAuth authentication. You are responsible for maintaining the confidentiality of your account credentials and for all activities that occur under your account. You agree to notify us immediately of any unauthorized use of your account.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">4. EigenCredits and Payment Processing</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">4. EigenCredits and Payment Processing</h3>
                 <p>
                   EigenWork operates on a credit-based system. You purchase EigenCredits, which are consumed when candidates submit applications through your intake links. Each candidate evaluation consumes one EigenCredit.
                 </p>
@@ -80,7 +80,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">5. Candidate Data and Evaluation</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">5. Candidate Data and Evaluation</h3>
                 <p>
                   When candidates apply through your intake links, they provide personal information, resumes, GitHub repository URLs (optional), project links, work preferences, and compensation expectations. This data is processed using AI models to generate ETI scores and evaluation insights.
                 </p>
@@ -100,7 +100,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">6. Use of AI APIs and Third-Party Services</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">6. Use of AI APIs and Third-Party Services</h3>
                 <p>
                   The Platform uses the following third-party AI and data processing services:
                 </p>
@@ -117,7 +117,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">7. Acceptable Use</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">7. Acceptable Use</h3>
                 <p>You agree not to:</p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li>Use the Platform for any illegal or unauthorized purpose</li>
@@ -131,14 +131,14 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">8. Intellectual Property</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">8. Intellectual Property</h3>
                 <p>
                   The Platform, including its design, functionality, ETI scoring algorithms, and evaluation methodologies, is the property of EigenWork (&quot;EigenWork&quot;, &quot;the Company&quot;) and its licensors. You may not copy, modify, distribute, or create derivative works based on the Platform without EigenWork&apos;s express written permission.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">9. Disclaimers and Limitations of Liability</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">9. Disclaimers and Limitations of Liability</h3>
                 <p>
                   <strong>No Guarantees:</strong> The Platform is provided &quot;as is&quot; without warranties of any kind. We do not guarantee that:
                 </p>
@@ -157,14 +157,14 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">10. Termination</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">10. Termination</h3>
                 <p>
                   We reserve the right to suspend or terminate your account at any time for violation of these Terms or for any other reason we deem necessary. Upon termination, your access to the Platform will cease, but candidate data associated with your account may be retained as described in our Privacy Policy.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">11. Changes to Terms</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">11. Changes to Terms</h3>
                 <p>
                   We may modify these Terms at any time. Material changes will be notified through the Platform or via email. Continued use of the Platform after changes constitutes acceptance of the modified Terms.
                 </p>
@@ -174,11 +174,11 @@ export default function TermsPage() {
 
           {/* PRIVACY POLICY */}
           <section className="mt-12">
-            <h2 className="text-2xl font-semibold text-gray-900 mb-4">Privacy Policy</h2>
+            <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Privacy Policy</h2>
             
-            <div className="space-y-6 text-gray-700 leading-relaxed">
+            <div className="space-y-6 text-gray-700 dark:text-gray-300 leading-relaxed">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">1. Information We Collect</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">1. Information We Collect</h3>
                 
                 <p className="font-medium mt-3">User Account Information:</p>
                 <ul className="list-disc pl-6 mt-1 space-y-1">
@@ -217,7 +217,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">2. How We Use Your Information</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">2. How We Use Your Information</h3>
                 <p>We use collected information to:</p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li>Provide and operate the Platform</li>
@@ -232,7 +232,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">3. Data Processing and AI Services</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">3. Data Processing and AI Services</h3>
                 <p>
                   Candidate data is processed using third-party AI services:
                 </p>
@@ -248,7 +248,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">4. Data Storage</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">4. Data Storage</h3>
                 <p>
                   All data is stored using Google Firebase services:
                 </p>
@@ -263,7 +263,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">5. Data Sharing and Disclosure</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">5. Data Sharing and Disclosure</h3>
                 <p>We do not sell your personal information. We may share data only in the following circumstances:</p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li><strong>With Service Providers:</strong> We share data with third-party service providers (Google, Paddle, GitHub) necessary to operate the Platform, as described in Section 3</li>
@@ -274,7 +274,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">6. Cookies and Tracking</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">6. Cookies and Tracking</h3>
                 <p>
                   The Platform uses session storage to temporarily store form data during the candidate application process. We do not use persistent cookies for tracking purposes. Firebase Auth may use cookies for session management. Paddle may use cookies for payment processing functionality.
                 </p>
@@ -284,7 +284,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">7. Data Retention</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">7. Data Retention</h3>
                 <p>
                   We retain your data for as long as necessary to provide the Platform and comply with legal obligations:
                 </p>
@@ -300,7 +300,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">8. Your Privacy Rights (GDPR/CCPA)</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">8. Your Privacy Rights (GDPR/CCPA)</h3>
                 <p>If you are located in the European Economic Area (EEA), United Kingdom, or California, you have the following rights:</p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li><strong>Access:</strong> Request a copy of your personal data</li>
@@ -320,7 +320,7 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">9. Security</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">9. Security</h3>
                 <p>
                   We implement technical and organizational measures to protect your data, including:
                 </p>
@@ -337,28 +337,28 @@ export default function TermsPage() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">10. Children&apos;s Privacy</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">10. Children&apos;s Privacy</h3>
                 <p>
                   The Platform is not intended for individuals under the age of 18. We do not knowingly collect personal information from children. If you believe we have collected information from a child, please contact us immediately.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">11. International Data Transfers</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">11. International Data Transfers</h3>
                 <p>
                   Your data may be processed and stored in the United States and other countries where our service providers operate. By using the Platform, you consent to the transfer of your data to these jurisdictions, which may have different data protection laws than your country of residence.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">12. Changes to Privacy Policy</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">12. Changes to Privacy Policy</h3>
                 <p>
                   We may update this Privacy Policy from time to time. Material changes will be notified through the Platform or via email. Continued use of the Platform after changes constitutes acceptance of the updated Privacy Policy.
                 </p>
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">13. Contact Us</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">13. Contact Us</h3>
                 <p>
                   If you have questions about these Terms or our Privacy Policy, please contact EigenWork at:
                 </p>

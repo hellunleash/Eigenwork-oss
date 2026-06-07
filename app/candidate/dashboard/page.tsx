@@ -49,14 +49,14 @@ function CandidateDashboardContent() {
   }, [searchParams, router]);
 
   if (loading || !data) return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center text-gray-400 text-sm">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0e] flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 text-sm transition-colors duration-300">
       {error ? (
         <>
           <p className="mb-2">{error}</p>
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm"
+            className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-md text-sm"
           >
             Exit
           </button>
@@ -68,12 +68,12 @@ function CandidateDashboardContent() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 font-sans">
-      <p className="text-gray-900 text-lg font-medium mb-6">Your application has been submitted.</p>
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0e] flex flex-col items-center justify-center p-4 font-sans transition-colors duration-300">
+      <p className="text-gray-900 dark:text-gray-100 text-lg font-medium mb-6">Your application has been submitted.</p>
       <button
         type="button"
         onClick={() => router.push("/")}
-        className="w-full max-w-xs py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+        className="w-full max-w-xs py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
       >
         Exit
       </button>
@@ -83,7 +83,7 @@ function CandidateDashboardContent() {
 
 export default function CandidateCardPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400 text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0e] flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">Loading…</div>}>
       <CandidateDashboardContent />
     </Suspense>
   );

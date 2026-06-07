@@ -98,14 +98,14 @@ export default function ProcessingPage() {
   // Error UI
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white p-4">
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-[#0a0a0e] p-4 transition-colors duration-300">
         <div className="text-center max-w-md">
-          <div className="text-red-500 text-5xl mb-4">✕</div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Analysis Failed</h2>
-          <p className="text-gray-500 mb-6">{error}</p>
+          <div className="text-red-500 dark:text-red-400 text-5xl mb-4">✕</div>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">Analysis Failed</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-6">{error}</p>
           <button
             onClick={() => router.push(jobId ? `/candidate?jobId=${encodeURIComponent(jobId)}` : '/candidate')}
-            className="px-6 py-2 bg-gray-900 text-white rounded-md hover:bg-gray-800"
+            className="px-6 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-md hover:bg-gray-800 dark:hover:bg-gray-200"
           >
             Try Again
           </button>
@@ -116,23 +116,23 @@ export default function ProcessingPage() {
 
   // Loading UI
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-[#0a0a0e] p-4 transition-colors duration-300">
       <div className="flex flex-col items-center space-y-6 max-w-md w-full">
-        
+
         <div className="relative w-16 h-16">
-          <div className="absolute top-0 left-0 w-full h-full border-4 border-gray-200 rounded-full"></div>
-          <div className="absolute top-0 left-0 w-full h-full border-4 border-gray-900 rounded-full animate-spin border-t-transparent"></div>
+          <div className="absolute top-0 left-0 w-full h-full border-4 border-gray-200 dark:border-white/[0.1] rounded-full"></div>
+          <div className="absolute top-0 left-0 w-full h-full border-4 border-gray-900 dark:border-gray-100 rounded-full animate-spin border-t-transparent"></div>
         </div>
 
         <div className="text-center space-y-2">
-          <h2 className="text-xl font-semibold text-gray-900">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
             EigenTrust AI
           </h2>
-          <p className="text-sm text-gray-500 animate-pulse">{status}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 animate-pulse">{status}</p>
         </div>
 
-        <div className="w-64 h-1 bg-gray-200 rounded-full overflow-hidden">
-          <div className="h-full bg-gray-900 animate-progress origin-left"></div>
+        <div className="w-64 h-1 bg-gray-200 dark:bg-white/[0.1] rounded-full overflow-hidden">
+          <div className="h-full bg-gray-900 dark:bg-gray-100 animate-progress origin-left"></div>
         </div>
 
       </div>
