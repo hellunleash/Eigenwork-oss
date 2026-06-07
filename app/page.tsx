@@ -30,7 +30,7 @@ export const revalidate = false;
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-white flex flex-col text-gray-900 antialiased">
+    <div className="min-h-screen bg-white dark:bg-[#0a0a0e] flex flex-col text-gray-900 dark:text-gray-100 antialiased transition-colors duration-300">
       <HomeNav />
       <HomeHero />
       <HomeHowItWorks />
