@@ -486,6 +486,11 @@ function workAuthMatch(
 ): boolean {
   if (jobAuth?.provided) return true;
   const regions = toArray(candidateAuthRegions).map((r) => String(r).toLowerCase());
+  // No stored work-auth regions (legacy candidates from before authRegions was
+  // persisted, or any data gap): don't silently reject — pass and let the
+  // recruiter judge. New submissions always carry authRegions (the intake form
+  // requires at least one), so they're still filtered strictly below.
+  if (regions.length === 0) return true;
   const hasRemoteGlobal = regions.some((r) => r.includes("remote") && r.includes("global"));
   if (hasRemoteGlobal) {
     const job = jobLocationTypes.map(normalizeLocation);

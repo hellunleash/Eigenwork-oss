@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
       phone,
       workTypes,
       locations,
+      authRegions,
       experience,
       minCompensation,
       maxCompensation,
@@ -305,6 +306,13 @@ export async function POST(req: NextRequest) {
         jobId: jobId ?? null,
         workTypes,
         locations,
+        // Work-authorization regions drive workAuthMatch() in the match
+        // pipeline. The intake form collects and requires these; persisting
+        // them here is mandatory — without it every JD with a US/EU work-auth
+        // requirement silently filtered out 100% of candidates.
+        authRegions: Array.isArray(authRegions)
+          ? authRegions.filter((r: unknown) => typeof r === "string")
+          : [],
         minSalary: minCompensation,
         maxSalary: maxCompensation,
         yearsExperience: experience,
