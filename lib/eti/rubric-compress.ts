@@ -4,20 +4,19 @@ import { ALL_BLOCKS_EXP } from "./rubric-senior";
 import { OVERLORD_RULES } from "./rubric-overlord";
 import { EXECUTION_CONTEXT } from "./rubric-context";
 
-// ⚡ UPDATED SCHEMAS: added structured role_fit with one_liner
-const schemaMap = {
-  "junior-esq": `
+// Output-schema fragments. Each scoring concern (ESQ / operating profile /
+// overlord) owns its own fragment so rubric changes touch exactly one block;
+// schemaMap below only composes them. Composition is byte-identical to the
+// previous inline literals — the LLM sees the same prompt text.
+export const ESQ_SCHEMA = `
   {
     "A1": number, "A2": number, "A3": number, "A4": number,
     "ESQ": number,
     "justification": short phrase(25words max)
   }
-  `,
-  "junior-behavioral": `
-  {
-    "pdq_breakdown": { "B1": number, "B2": number, "B3": number, "PDQ": number, "justification": "short phrase(5-15words)" },
-    "nr_breakdown": { "C1": number, "C2": number, "NR": number, "justification": "short phrase(5-15words)" },
-    "operating_profile": {
+  `;
+
+export const PROFILE_SCHEMA_FRAGMENT = `"operating_profile": {
         "ramp_expectation": "High | Medium | Low",
         "ramp_reason": "short phrase(5-15words)",
         "supervision_load": "High | Medium | Low",
@@ -34,8 +33,18 @@ const schemaMap = {
         },
 
         "risk_flags": string[]
-    },
-    "overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40",
+    }`;
+
+export const OVERLORD_SCHEMA_FRAGMENT = `"overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40"`;
+
+const schemaMap = {
+  "junior-esq": ESQ_SCHEMA,
+  "junior-behavioral": `
+  {
+    "pdq_breakdown": { "B1": number, "B2": number, "B3": number, "PDQ": number, "justification": "short phrase(5-15words)" },
+    "nr_breakdown": { "C1": number, "C2": number, "NR": number, "justification": "short phrase(5-15words)" },
+    ${PROFILE_SCHEMA_FRAGMENT},
+    ${OVERLORD_SCHEMA_FRAGMENT},
     "yoe": number
   }
   `,
@@ -44,25 +53,8 @@ const schemaMap = {
     "om_breakdown": { "A1": number, "A2": number, "A3": number, "OM": number, "justification": "short phrase(5-15words)" },
     "od_breakdown": { "B1": number, "B2": number, "B3": number, "OD": number, "justification": "short phrase(5-15words)" },
     "pc_breakdown": { "C1": number, "C2": number, "C3": number, "PC": number, "justification": "short phrase(5-15words)" },
-    "operating_profile": {
-        "ramp_expectation": "High | Medium | Low",
-        "ramp_reason": "short phrase(5-15words)",
-        "supervision_load": "High | Medium | Low",
-        "supervision_reason": "short phrase(5-15words)",
-        "stack_transfer_risk": "High | Medium | Low",
-        "reliability_under_pressure": "High | Medium | Low",
-
-        "role_fit": {
-          "title": string,
-          "primary": string,
-          "secondary": string[],
-          "tertiary": string[],
-          "one_liner": string
-        },
-
-        "risk_flags": string[]
-    },
-    "overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40",
+    ${PROFILE_SCHEMA_FRAGMENT},
+    ${OVERLORD_SCHEMA_FRAGMENT},
     "yoe": number
   }
   `

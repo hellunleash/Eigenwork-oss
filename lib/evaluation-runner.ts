@@ -12,6 +12,24 @@ function normalizeScore(raw: number): number {
   return Math.min(100, Math.round((raw / MAX_RAW_SCORE) * 100));
 }
 
+// Scoring v2 is opt-in via env so a bad outcome is a config rollback, not a
+// revert. Every result is stamped with the rubric that produced it so pools
+// can be audited for mixed-rubric ranking (ADR-003: one pool, one rubric).
+export type RubricVersion = "v1" | "v2";
+export function activeRubricVersion(): RubricVersion {
+  return process.env.ETI_RUBRIC_VERSION === "v2" ? "v2" : "v1";
+}
+
+// Overlord caps are a contract in NORMALIZED space — 40/85 and 46/85 of the
+// display scale — so they hold even when a track is renormalized over a
+// different max raw (e.g. junior scored without GitHub evidence). At
+// maxRaw = MAX_RAW_SCORE this is exactly the historical min(raw, 40|46).
+export function applyOverlordCap(rawScore: number, overlord: string | undefined, maxRaw: number): number {
+  if (overlord === "inflated_cap_40") return Math.min(rawScore, (40 / 85) * maxRaw);
+  if (overlord === "suspicious_cap_46") return Math.min(rawScore, (46 / 85) * maxRaw);
+  return rawScore;
+}
+
 function safeYoe(value: unknown): number | undefined {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 99.9) return undefined;
@@ -98,6 +116,7 @@ export type EvaluationResult = {
   is_matchable: boolean;
   overlord?: string;
   rawScore?: number;
+  rubric_version: RubricVersion;
 };
 
 function n(v: unknown): number {
@@ -155,8 +174,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
 
     let rawScore = ESQ + PDQ + NR;
     const overlord = typeof jsonBehav.overlord === "string" ? jsonBehav.overlord : undefined;
-    if (overlord === "inflated_cap_40") rawScore = Math.min(rawScore, 40);
-    if (overlord === "suspicious_cap_46") rawScore = Math.min(rawScore, 46);
+    rawScore = applyOverlordCap(rawScore, overlord, MAX_RAW_SCORE);
     const score = normalizeScore(rawScore);
     const yoe = safeYoe(jsonBehav.yoe);
 
@@ -174,6 +192,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
       is_matchable: score >= 50,
       overlord,
       rawScore,
+      rubric_version: activeRubricVersion(),
     };
   }
 
@@ -190,8 +209,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
 
   let rawScore = OM + OD + PC;
   const overlord = typeof json.overlord === "string" ? json.overlord : undefined;
-  if (overlord === "inflated_cap_40") rawScore = Math.min(rawScore, 40);
-  if (overlord === "suspicious_cap_46") rawScore = Math.min(rawScore, 46);
+  rawScore = applyOverlordCap(rawScore, overlord, MAX_RAW_SCORE);
   const score = normalizeScore(rawScore);
   const yoe = safeYoe(json.yoe);
 
@@ -212,6 +230,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     is_matchable: score >= 50,
     overlord,
     rawScore,
+    rubric_version: activeRubricVersion(),
   };
 }
 
