@@ -60,6 +60,27 @@ const schemaMap = {
   `
 };
 
+// Scoring-v2 rubric blocks. Each v2 workstream registers its block as one
+// line in this initializer (its text lives in the unit's own rubric file);
+// any entry left undefined falls back to the v1 text, so the v2 flag is safe
+// to flip before every unit has landed.
+export const V2_BLOCKS: {
+  common?: string;
+  juniorEsq?: string;
+  juniorEsqTask?: string;
+  juniorBehavioral?: string;
+  senior?: string;
+  overlord?: string;
+  executionContext?: string;
+  schemaJuniorEsq?: string;
+  schemaJuniorBehavioral?: string;
+  schemaSenior?: string;
+} = {};
+
+function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
+  return useV2 && v2Text ? v2Text : v1Text;
+}
+
 const YOE_INSTRUCTIONS = `
 Years of Experience (yoe) calculation:
 - Current server date is provided above. Treat "Present", "Current", "Now", or similar as that exact date.
@@ -73,12 +94,15 @@ Years of Experience (yoe) calculation:
 export function buildETIPrompt({
   context,
   mode,
-  currentDate
+  currentDate,
+  rubricVersion = "v1"
 }: {
   context: string;
   mode: "junior-esq" | "junior-behavioral" | "senior";
   currentDate?: string;
+  rubricVersion?: "v1" | "v2";
 }) {
+  const useV2 = rubricVersion === "v2";
 
   const header = `You are EigenTrustIndex(ETI), a professional-grade technical candidate evaluator for fast-moving startups (pre-seed to Series D).
 You prefer risk management over optimistic scoring. You MUST output ONLY a valid JSON object.
@@ -95,17 +119,23 @@ For role_fit:
   let rubricText = "";
   let taskText = "";
 
+  const common = pick(useV2, V2_BLOCKS.common, COMMON_INSTRUCTIONS);
+  let schemaText = schemaMap[mode];
+
   if (mode === "junior-esq") {
-    rubricText = `${COMMON_INSTRUCTIONS}\n${BLOCK_1_ET_ESQ}`;
-    taskText = "TASK: Score ESQ Block only. Input is GitHub DNA.";
+    rubricText = `${common}\n${pick(useV2, V2_BLOCKS.juniorEsq, BLOCK_1_ET_ESQ)}`;
+    taskText = pick(useV2, V2_BLOCKS.juniorEsqTask, "TASK: Score ESQ Block only. Input is GitHub DNA.");
+    schemaText = pick(useV2, V2_BLOCKS.schemaJuniorEsq, schemaText);
   }
   else if (mode === "junior-behavioral") {
-    rubricText = `${COMMON_INSTRUCTIONS}\n${BLOCK_2_3_ET_BEHAVIORAL}\n${EXECUTION_CONTEXT}\n${OVERLORD_RULES}`;
+    rubricText = `${common}\n${pick(useV2, V2_BLOCKS.juniorBehavioral, BLOCK_2_3_ET_BEHAVIORAL)}\n${pick(useV2, V2_BLOCKS.executionContext, EXECUTION_CONTEXT)}\n${pick(useV2, V2_BLOCKS.overlord, OVERLORD_RULES)}`;
     taskText = "TASK: First score PDQ and NR and generate the operating_profile and then execute overlord rules.";
+    schemaText = pick(useV2, V2_BLOCKS.schemaJuniorBehavioral, schemaText);
   }
   else if (mode === "senior") {
-    rubricText = `${COMMON_INSTRUCTIONS}\n${ALL_BLOCKS_EXP}\n${EXECUTION_CONTEXT}\n${OVERLORD_RULES}`;
+    rubricText = `${common}\n${pick(useV2, V2_BLOCKS.senior, ALL_BLOCKS_EXP)}\n${pick(useV2, V2_BLOCKS.executionContext, EXECUTION_CONTEXT)}\n${pick(useV2, V2_BLOCKS.overlord, OVERLORD_RULES)}`;
     taskText = "TASK: First score OM, OD, and PC and generate the operating_profile and then execute overlord rules.";
+    schemaText = pick(useV2, V2_BLOCKS.schemaSenior, schemaText);
   }
 
   return `
@@ -122,7 +152,7 @@ ${currentDate ? `Current server date: ${currentDate}\n\n` : ""}${context}
 
 ${currentDate && (mode === "junior-behavioral" || mode === "senior") ? `=== YOE CALCULATION ===\n${YOE_INSTRUCTIONS}\n` : ""}
 === REQUIRED OUTPUT SCHEMA ===
-${schemaMap[mode]}
+${schemaText}
 `;
 }
 

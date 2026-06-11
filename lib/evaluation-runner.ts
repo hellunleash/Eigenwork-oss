@@ -156,8 +156,8 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     // the wall-clock of a junior evaluation. Peak request concurrency is capped
     // by the gate in lib/openai-client.ts and 429s are retried in safeGenerate,
     // so the extra simultaneous call does not risk rate-limit failures.
-    const promptESQ = buildETIPrompt({ context: githubContext, mode: "junior-esq" });
-    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate });
+    const promptESQ = buildETIPrompt({ context: githubContext, mode: "junior-esq", rubricVersion: activeRubricVersion() });
+    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate, rubricVersion: activeRubricVersion() });
     const [rawESQ, rawBehav] = await Promise.all([
       safeGenerate(promptESQ, { ...ctx, phase: "junior-esq" }),
       safeGenerate(promptBehav, { ...ctx, phase: "junior-behavioral" }),
@@ -196,7 +196,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     };
   }
 
-  const promptSenior = buildETIPrompt({ context: resumeContext, mode: "senior", currentDate: serverDate });
+  const promptSenior = buildETIPrompt({ context: resumeContext, mode: "senior", currentDate: serverDate, rubricVersion: activeRubricVersion() });
   const raw = String(await safeGenerate(promptSenior, { ...ctx, phase: "senior" }));
   const json = extractJSON(raw, { ...ctx, phase: "senior" }) as Record<string, unknown>;
 
