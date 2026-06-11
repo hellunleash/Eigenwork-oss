@@ -37,27 +37,38 @@ export const PROFILE_SCHEMA_FRAGMENT = `"operating_profile": {
 
 export const OVERLORD_SCHEMA_FRAGMENT = `"overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40"`;
 
-const schemaMap = {
-  "junior-esq": ESQ_SCHEMA,
-  "junior-behavioral": `
+// Schema builders take the profile/overlord fragments as parameters so the v2
+// path can swap individual fragments (registered in V2_BLOCKS) without any
+// workstream rewriting the whole schema literal.
+function juniorBehavioralSchema(profileFrag: string, overlordFrag: string): string {
+  return `
   {
     "pdq_breakdown": { "B1": number, "B2": number, "B3": number, "PDQ": number, "justification": "short phrase(5-15words)" },
     "nr_breakdown": { "C1": number, "C2": number, "NR": number, "justification": "short phrase(5-15words)" },
-    ${PROFILE_SCHEMA_FRAGMENT},
-    ${OVERLORD_SCHEMA_FRAGMENT},
+    ${profileFrag},
+    ${overlordFrag},
     "yoe": number
   }
-  `,
-  "senior": `
+  `;
+}
+
+function seniorSchema(profileFrag: string, overlordFrag: string): string {
+  return `
   {
     "om_breakdown": { "A1": number, "A2": number, "A3": number, "OM": number, "justification": "short phrase(5-15words)" },
     "od_breakdown": { "B1": number, "B2": number, "B3": number, "OD": number, "justification": "short phrase(5-15words)" },
     "pc_breakdown": { "C1": number, "C2": number, "C3": number, "PC": number, "justification": "short phrase(5-15words)" },
-    ${PROFILE_SCHEMA_FRAGMENT},
-    ${OVERLORD_SCHEMA_FRAGMENT},
+    ${profileFrag},
+    ${overlordFrag},
     "yoe": number
   }
-  `
+  `;
+}
+
+const schemaMap = {
+  "junior-esq": ESQ_SCHEMA,
+  "junior-behavioral": juniorBehavioralSchema(PROFILE_SCHEMA_FRAGMENT, OVERLORD_SCHEMA_FRAGMENT),
+  "senior": seniorSchema(PROFILE_SCHEMA_FRAGMENT, OVERLORD_SCHEMA_FRAGMENT)
 };
 
 // Scoring-v2 rubric blocks. Each v2 workstream registers its block as one
@@ -73,8 +84,8 @@ export const V2_BLOCKS: {
   overlord?: string;
   executionContext?: string;
   schemaJuniorEsq?: string;
-  schemaJuniorBehavioral?: string;
-  schemaSenior?: string;
+  schemaProfileFragment?: string;
+  schemaOverlordFragment?: string;
 } = {};
 
 function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
@@ -130,12 +141,22 @@ For role_fit:
   else if (mode === "junior-behavioral") {
     rubricText = `${common}\n${pick(useV2, V2_BLOCKS.juniorBehavioral, BLOCK_2_3_ET_BEHAVIORAL)}\n${pick(useV2, V2_BLOCKS.executionContext, EXECUTION_CONTEXT)}\n${pick(useV2, V2_BLOCKS.overlord, OVERLORD_RULES)}`;
     taskText = "TASK: First score PDQ and NR and generate the operating_profile and then execute overlord rules.";
-    schemaText = pick(useV2, V2_BLOCKS.schemaJuniorBehavioral, schemaText);
+    if (useV2) {
+      schemaText = juniorBehavioralSchema(
+        V2_BLOCKS.schemaProfileFragment ?? PROFILE_SCHEMA_FRAGMENT,
+        V2_BLOCKS.schemaOverlordFragment ?? OVERLORD_SCHEMA_FRAGMENT
+      );
+    }
   }
   else if (mode === "senior") {
     rubricText = `${common}\n${pick(useV2, V2_BLOCKS.senior, ALL_BLOCKS_EXP)}\n${pick(useV2, V2_BLOCKS.executionContext, EXECUTION_CONTEXT)}\n${pick(useV2, V2_BLOCKS.overlord, OVERLORD_RULES)}`;
     taskText = "TASK: First score OM, OD, and PC and generate the operating_profile and then execute overlord rules.";
-    schemaText = pick(useV2, V2_BLOCKS.schemaSenior, schemaText);
+    if (useV2) {
+      schemaText = seniorSchema(
+        V2_BLOCKS.schemaProfileFragment ?? PROFILE_SCHEMA_FRAGMENT,
+        V2_BLOCKS.schemaOverlordFragment ?? OVERLORD_SCHEMA_FRAGMENT
+      );
+    }
   }
 
   return `
