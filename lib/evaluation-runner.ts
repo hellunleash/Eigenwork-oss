@@ -1,5 +1,6 @@
 import { runJsonModel } from "@/lib/openai-client";
 import { getRepoDNA } from "@/lib/github-utils";
+import { getGithubSignal, type EsqSignalStatus } from "@/lib/github-signals";
 import { extractResumeText } from "@/lib/docai-extract";
 import { buildETIPrompt, truncateInput, cleanAndParseJSON } from "@/lib/eti/rubric-compress";
 import { log, type LogContext, timeMs } from "@/lib/server-logger";
@@ -8,8 +9,14 @@ type ExperienceBucket = "<2" | ">=2" | string;
 
 // Raw ETI is 0–85 (junior: ESQ+PDQ+NR; senior: OM+OD+PC). Normalize to 0–100 for display.
 const MAX_RAW_SCORE = 85;
-function normalizeScore(raw: number): number {
-  return Math.min(100, Math.round((raw / MAX_RAW_SCORE) * 100));
+// Junior raw without ESQ evidence is PDQ(30)+NR(20) = 50; the v2 "unavailable"
+// branch renormalizes over this so a missing-evidence candidate isn't unfairly
+// scored against the full 85-point ceiling.
+const JUNIOR_NO_ESQ_MAX_RAW = 50;
+// v2 "unavailable" hard cap: no top band without verified GitHub evidence.
+const UNAVAILABLE_SCORE_CAP = 79;
+function normalizeScore(raw: number, maxRaw: number = MAX_RAW_SCORE): number {
+  return Math.min(100, Math.round((raw / maxRaw) * 100));
 }
 
 // Scoring v2 is opt-in via env so a bad outcome is a config rollback, not a
@@ -117,6 +124,14 @@ export type EvaluationResult = {
   overlord?: string;
   rawScore?: number;
   rubric_version: RubricVersion;
+  // ESQ evidence status (junior v2 only). Persisted via the `...result` spread
+  // at both call sites (worker/index.ts and app/api/worker/evaluate/route.ts).
+  // - ok          : GitHub signal acquired; scored over MAX_RAW_SCORE (85).
+  // - unavailable : rate-limit/5xx/network/budget; junior renormalized over 50
+  //                 and the normalized score capped at 79 (no top band w/o evidence).
+  // - no_evidence : no/404/empty/forks-only GitHub; ESQ=0 over 85 (ceiling ~59).
+  // Undefined on the v1 path and the senior path.
+  esq_status?: EsqSignalStatus;
 };
 
 function n(v: unknown): number {
@@ -137,7 +152,13 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
 
   const resumeContext = truncateInput(`RESUME CONTENT:\n${extractedText || "No text extracted"}`, 20000);
 
+  const rubricVersion = activeRubricVersion();
   const isJunior = input.experience === "<2";
+
+  if (isJunior && rubricVersion === "v2") {
+    return runJuniorV2(input, ctx, serverDate, resumeContext);
+  }
+
   let githubContext = "No GitHub";
   if (isJunior && input.githubUrl) {
     const t = timeMs();
@@ -156,8 +177,8 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     // the wall-clock of a junior evaluation. Peak request concurrency is capped
     // by the gate in lib/openai-client.ts and 429s are retried in safeGenerate,
     // so the extra simultaneous call does not risk rate-limit failures.
-    const promptESQ = buildETIPrompt({ context: githubContext, mode: "junior-esq", rubricVersion: activeRubricVersion() });
-    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate, rubricVersion: activeRubricVersion() });
+    const promptESQ = buildETIPrompt({ context: githubContext, mode: "junior-esq", rubricVersion });
+    const promptBehav = buildETIPrompt({ context: resumeContext, mode: "junior-behavioral", currentDate: serverDate, rubricVersion });
     const [rawESQ, rawBehav] = await Promise.all([
       safeGenerate(promptESQ, { ...ctx, phase: "junior-esq" }),
       safeGenerate(promptBehav, { ...ctx, phase: "junior-behavioral" }),
@@ -192,11 +213,11 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
       is_matchable: score >= 50,
       overlord,
       rawScore,
-      rubric_version: activeRubricVersion(),
+      rubric_version: rubricVersion,
     };
   }
 
-  const promptSenior = buildETIPrompt({ context: resumeContext, mode: "senior", currentDate: serverDate, rubricVersion: activeRubricVersion() });
+  const promptSenior = buildETIPrompt({ context: resumeContext, mode: "senior", currentDate: serverDate, rubricVersion });
   const raw = String(await safeGenerate(promptSenior, { ...ctx, phase: "senior" }));
   const json = extractJSON(raw, { ...ctx, phase: "senior" }) as Record<string, unknown>;
 
@@ -230,7 +251,133 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     is_matchable: score >= 50,
     overlord,
     rawScore,
-    rubric_version: activeRubricVersion(),
+    rubric_version: rubricVersion,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Junior v2 branch — ESQ "AI-leverage" signal (metadata + regex, no code → LLM)
+// ---------------------------------------------------------------------------
+// Differences from v1 junior:
+//   - GitHub is read via getGithubSignal (2 API calls, deterministic) instead
+//     of getRepoDNA (which fed source code to the ESQ LLM).
+//   - The ESQ LLM scores a SIGNAL SUMMARY (counts + metadata), never code.
+//   - esq_status drives normalization:
+//       ok          → ESQ scored; normalize over 85 (as today).
+//       unavailable → skip ESQ; renormalize PDQ+NR over 50; cap normalized ≤79.
+//       no_evidence → ESQ=0; normalize over 85 (ceiling ~59 is automatic).
+//   - The signal summary is appended to the BEHAVIORAL context so the model can
+//     cross-check resume claims vs GitHub reality (the cross-block-consistency
+//     rule in COMMON_INSTRUCTIONS already covers it; we only supply the data).
+//
+// Re-queue note: the "unavailable" policy says to re-queue the job once before
+// accepting the renormalized score. runEvaluation is pure (no Firestore /
+// queue access by design — see Unit 0), so there is no requeue mechanism
+// reachable from here. The persistence call sites (worker/index.ts and
+// app/api/worker/evaluate/route.ts) ALREADY re-queue on a THROWN error (they
+// set the job back to "queued", attempts+1, up to 5 tries). We deliberately do
+// NOT throw on "unavailable": a throw would also re-run the resume Doc AI +
+// behavioral LLM and re-spend a screen credit, and after the retry budget the
+// candidate would end with NO score at all. Instead we proceed with the
+// renormalized, ≤79-capped score, persist esq_status:"unavailable" so the
+// outcome is auditable, and rely on the existing transient-retry inside
+// getGithubSignal's two fetches for the common rate-limit case.
+async function runJuniorV2(
+  input: EvaluationInput,
+  ctx: LogContext,
+  serverDate: string,
+  resumeContext: string
+): Promise<EvaluationResult> {
+  const rubricVersion: RubricVersion = "v2";
+
+  // --- GitHub signal (deterministic, ≤2 API calls; never sends code to an LLM) ---
+  let esqStatus: EsqSignalStatus = "no_evidence";
+  let signalSummary = "No GitHub evidence available.";
+  if (input.githubUrl) {
+    const t = timeMs();
+    try {
+      const signal = await getGithubSignal(input.githubUrl);
+      esqStatus = signal.status;
+      signalSummary = signal.summaryText;
+      log("info", "github.signal_done", { ...ctx, latencyMs: t(), esqStatus, apiCalls: signal.apiCalls });
+    } catch (e) {
+      // Any unexpected throw is treated as a transient outage, not absence.
+      esqStatus = "unavailable";
+      signalSummary = "GitHub signal unavailable (transient error).";
+      log("warn", "github.signal_failed", { ...ctx, latencyMs: t() }, e);
+    }
+  }
+
+  // Cross-check injection: the behavioral block also sees the GitHub signal so
+  // it can flag resume claims that GitHub contradicts (e.g. claims CI/CD but
+  // no CI). We do NOT edit the behavioral RUBRIC text — only supply the data.
+  const behavContext = `${resumeContext}\n\n=== GITHUB SIGNAL (deterministic; for cross-checking resume claims) ===\n${signalSummary}`;
+
+  const promptBehav = buildETIPrompt({ context: behavContext, mode: "junior-behavioral", currentDate: serverDate, rubricVersion });
+
+  // Only run the ESQ LLM call when there is a real signal to score. For
+  // unavailable / no_evidence we skip it (ESQ=0) — both saves a call and keeps
+  // the no-evidence ceiling deterministic.
+  const runEsq = esqStatus === "ok";
+  const promptESQ = runEsq
+    ? buildETIPrompt({ context: signalSummary, mode: "junior-esq", rubricVersion })
+    : null;
+
+  const [rawESQ, rawBehav] = await Promise.all([
+    promptESQ ? safeGenerate(promptESQ, { ...ctx, phase: "junior-esq" }) : Promise.resolve(""),
+    safeGenerate(promptBehav, { ...ctx, phase: "junior-behavioral" }),
+  ]);
+
+  const esq = runEsq ? (extractJSON(rawESQ, { ...ctx, phase: "junior-esq" }) as Record<string, unknown>) : {};
+  const ESQ = runEsq ? n(esq.A1) + n(esq.A2) + n(esq.A3) + n(esq.A4) : 0;
+
+  const jsonBehav = extractJSON(rawBehav, { ...ctx, phase: "junior-behavioral" }) as Record<string, unknown>;
+  const pdq = (jsonBehav.pdq_breakdown as Record<string, unknown> | undefined) ?? {};
+  const nr = (jsonBehav.nr_breakdown as Record<string, unknown> | undefined) ?? {};
+  const PDQ = n(pdq.B1) + n(pdq.B2) + n(pdq.B3);
+  const NR = n(nr.C1) + n(nr.C2);
+  const overlord = typeof jsonBehav.overlord === "string" ? jsonBehav.overlord : undefined;
+  const yoe = safeYoe(jsonBehav.yoe);
+
+  // --- esq_status normalization policy ---
+  let rawScore: number;
+  let score: number;
+  if (esqStatus === "unavailable") {
+    // Renormalize PDQ+NR over 50; overlord cap applied in normalized space over
+    // the same 50 max; then hard-cap the normalized score at 79.
+    rawScore = applyOverlordCap(PDQ + NR, overlord, JUNIOR_NO_ESQ_MAX_RAW);
+    score = Math.min(UNAVAILABLE_SCORE_CAP, normalizeScore(rawScore, JUNIOR_NO_ESQ_MAX_RAW));
+  } else {
+    // ok: ESQ + PDQ + NR over 85.  no_evidence: ESQ=0 → PDQ+NR over 85 (≤59).
+    rawScore = applyOverlordCap(ESQ + PDQ + NR, overlord, MAX_RAW_SCORE);
+    score = normalizeScore(rawScore, MAX_RAW_SCORE);
+  }
+
+  log("info", "evaluation.scored", {
+    ...ctx,
+    track: "junior",
+    rubricVersion,
+    esqStatus,
+    rawScore,
+    score,
+    overlord,
+    ...(yoe != null ? { yoe } : {}),
+  });
+
+  return {
+    score,
+    ...(yoe != null && { yoe }),
+    breakdown: {
+      ESQ: { ...esq, ESQ },
+      PDQ: { ...pdq, PDQ },
+      NR: { ...nr, NR },
+    },
+    profile: (jsonBehav.operating_profile as unknown) ?? {},
+    is_matchable: score >= 50,
+    overlord,
+    rawScore,
+    rubric_version: rubricVersion,
+    esq_status: esqStatus,
   };
 }
 
