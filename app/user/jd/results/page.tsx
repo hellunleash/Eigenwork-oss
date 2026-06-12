@@ -20,6 +20,14 @@ function getRoleFitOneLiner(c: Candidate): string {
   return "Not provided";
 }
 
+// v2 decision line (base + edge + caveat) when present; otherwise fall back to
+// the role-fit one-liner so pre-v2 docs (no decision_line) still render.
+function getDecisionText(c: Candidate): string {
+  const text = c.profile?.decision_line?.text;
+  if (typeof text === "string" && text.trim()) return text.trim();
+  return getRoleFitOneLiner(c);
+}
+
 function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistribution }) {
   const { buckets, total } = distribution;
   if (total === 0) return null;
@@ -301,7 +309,7 @@ function JDResultsContent() {
   }, [jobId, isSubmitting, router]);
 
   const exportCsv = () => {
-    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Role Fit"];
+    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Decision", "Role Fit"];
     const rows = top10.map((c, i) => {
       const wt = c.matchData?.workTypes;
       const workTypes = Array.isArray(wt) ? wt.join("; ") : wt != null ? String(wt) : "";
@@ -315,6 +323,7 @@ function JDResultsContent() {
         (c.matchData?.locations ?? []).join("; "),
         workTypes,
         (c.matchData?.work_auth ?? "").trim(),
+        getDecisionText(c),
         getRoleFitOneLiner(c),
       ];
     });
@@ -425,7 +434,8 @@ function JDResultsContent() {
             const workTypesRaw = c.matchData?.workTypes;
             const workTypes = Array.isArray(workTypesRaw) ? workTypesRaw.join(", ") : (workTypesRaw ? String(workTypesRaw) : "—");
             const workAuth = (c.matchData?.work_auth ?? "").trim() || "—";
-            const roleFit = getRoleFitOneLiner(c);
+            const decisionText = getDecisionText(c);
+            const evidenceUnavailable = c.esq_status === "unavailable";
             const name = (c.candidateName ?? "").trim();
             const email = (c.email ?? "").trim();
             const phone = c.phone != null ? String(c.phone).trim() : "";
@@ -451,19 +461,20 @@ function JDResultsContent() {
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-2 flex flex-row flex-wrap items-center gap-x-1 gap-y-0">
                     {identityLine}
                   </p>
-                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate max-w-full mb-2">
-                    {roleFit}
-                  </p>
+                  <div className="flex flex-wrap items-start gap-x-2 gap-y-1 mb-2">
+                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {decisionText}
+                    </p>
+                    {evidenceUnavailable && (
+                      <span className="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                        evidence unavailable
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
                     {location} • {workTypes} • {workAuth}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <a
-                      href={jobId ? `/user/candidatecard/${encodeURIComponent(c.id)}?jobId=${encodeURIComponent(jobId)}` : `/candidate/dashboard?id=${encodeURIComponent(c.id)}`}
-                      className="inline-flex items-center px-3 py-1.5 bg-gray-900 dark:bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-indigo-700"
-                    >
-                      View Candidate Card
-                    </a>
                     <button
                       type="button"
                       onClick={async () => {

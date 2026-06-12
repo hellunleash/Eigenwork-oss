@@ -13,12 +13,26 @@ type RoleFit = {
   tertiary?: string[];
 };
 
+// v2 scoring (opt-in behind ETI_RUBRIC_VERSION=v2). Pre-v2 docs will NOT have
+// this field, so it is optional and the UI must fall back to role_fit.one_liner.
+type DecisionLine = {
+  base: string;
+  edge: string;
+  caveat: string;
+  text: string;
+};
+
 export type Candidate = {
   id: string;
   score: number;
   yoe?: number;
-  profile?: { role_fit?: RoleFit | string };
+  profile?: {
+    role_fit?: RoleFit | string;
+    decision_line?: DecisionLine;
+  };
   role_fit?: RoleFit | string;
+  // Evidence status from v2 scoring; may be absent on older docs.
+  esq_status?: 'ok' | 'unavailable' | 'no_evidence';
   candidateName?: string;
   email?: string;
   phone?: string | null;
