@@ -114,7 +114,6 @@ export const V2_BLOCKS: {
   schemaProfileFragment?: string;
   schemaOverlordFragment?: string;
 } = {
-<<<<<<< HEAD
   // Unit A — ESQ v2 "AI-leverage" signal (junior). Input is a deterministic
   // GitHub-signal summary (metadata + regex counts), NOT source code.
   juniorEsq: BLOCK_1_ET_ESQ_V2,
