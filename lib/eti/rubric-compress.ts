@@ -2,7 +2,7 @@ import { COMMON_INSTRUCTIONS, COMMON_INSTRUCTIONS_V2 } from "./rubric-common";
 import { BLOCK_1_ET_ESQ, BLOCK_1_ET_ESQ_V2, BLOCK_2_3_ET_BEHAVIORAL, BLOCK_2_3_ET_BEHAVIORAL_V2 } from "./rubric-junior";
 import { ALL_BLOCKS_EXP, ALL_BLOCKS_EXP_V2 } from "./rubric-senior";
 import { OVERLORD_RULES, OVERLORD_RULES_V2 } from "./rubric-overlord";
-import { EXECUTION_CONTEXT } from "./rubric-context";
+import { EXECUTION_CONTEXT, EXECUTION_CONTEXT_V2 } from "./rubric-context";
 
 // Output-schema fragments. Each scoring concern (ESQ / operating profile /
 // overlord) owns its own fragment so rubric changes touch exactly one block;
@@ -44,6 +44,24 @@ export const OVERLORD_SCHEMA_FRAGMENT_V2 = `"overlord": {
       "verdict": "safe" | "suspicious" | "inflated",
       "fraud_risk": number,
       "triggered": [ { "id": string, "reason": "short phrase(<=12words)" } ]
+    }`;
+
+// Scoring-v2 profile fragment. Keeps the SAME `operating_profile` wrapper so the
+// runner's `json.operating_profile` parsing is unchanged, but DROPS the four
+// operating dimensions (ramp/supervision/stack-transfer/reliability) — v2
+// collapses them into a code-assembled decision line. role_fit is byte-identical
+// to v1 (LOAD-BEARING: match route + rolefit-cache key off its one_liner) and
+// risk_flags is preserved.
+export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
+        "role_fit": {
+          "title": string,
+          "primary": string,
+          "secondary": string[],
+          "tertiary": string[],
+          "one_liner": string
+        },
+
+        "risk_flags": string[]
     }`;
 
 // Schema builders take the profile/overlord fragments as parameters so the v2
@@ -96,6 +114,7 @@ export const V2_BLOCKS: {
   schemaProfileFragment?: string;
   schemaOverlordFragment?: string;
 } = {
+<<<<<<< HEAD
   // Unit A — ESQ v2 "AI-leverage" signal (junior). Input is a deterministic
   // GitHub-signal summary (metadata + regex counts), NOT source code.
   juniorEsq: BLOCK_1_ET_ESQ_V2,
@@ -111,6 +130,12 @@ export const V2_BLOCKS: {
   // detectors. The runner derives the numeric cap from fraud_risk.
   overlord: OVERLORD_RULES_V2,
   schemaOverlordFragment: OVERLORD_SCHEMA_FRAGMENT_V2,
+  // Unit D — decision line: v2 drops the 4 operating dimensions from both the
+  // prompt (executionContext) and the output schema (schemaProfileFragment),
+  // keeping only role_fit + risk_flags. The decision line itself is assembled
+  // in code in lib/evaluation-runner.ts.
+  executionContext: EXECUTION_CONTEXT_V2,
+  schemaProfileFragment: PROFILE_SCHEMA_FRAGMENT_V2,
 };
 
 function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
