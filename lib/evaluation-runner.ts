@@ -124,6 +124,94 @@ function n(v: unknown): number {
   return Number.isFinite(x) ? x : 0;
 }
 
+// ── Decision line (scoring v2) ───────────────────────────────────────────────
+// v2 replaces the operating-profile reading chore with a single decisive
+// recruiter line: base + edge + caveat. It is assembled deterministically in
+// code AFTER all model calls return — every clause traces to an already-computed
+// sub-score, so it adds no LLM cost and cannot drift from the numbers shown.
+// The shape ({ base, edge, caveat, text }) is a self-contained ATS write-back
+// payload: one `text` sentence plus the structured parts.
+export type DecisionLine = {
+  base: string;
+  edge: string;
+  caveat: string;
+  text: string;
+};
+
+// One scored block + its model justification. base/edge/caveat are picked from
+// these: edge = highest-scoring block's justification, caveat = lowest's.
+type DecisionBlock = { label: string; score: number; justification: string };
+
+// Trust band derived from the normalized 0–100 score. Bands: <50 / 50–64 /
+// 65–79 / 80+ (matches is_matchable's 50 cutoff at the low edge).
+function trustBand(score: number): string {
+  if (score >= 80) return "Strong";
+  if (score >= 65) return "Solid";
+  if (score >= 50) return "Borderline";
+  return "Weak";
+}
+
+function justificationOf(v: unknown): string {
+  return typeof v === "string" && v.trim() ? v.trim() : "";
+}
+
+function asString(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+// Deterministic decision line from already-computed sub-scores. No model call.
+function assembleDecisionLine(args: {
+  score: number;
+  yoe?: number;
+  roleFit: Record<string, unknown> | undefined;
+  blocks: DecisionBlock[];
+  overlord: string | undefined;
+  esqStatus?: unknown; // may be added by a sibling unit; read defensively
+}): DecisionLine {
+  const { score, yoe, roleFit, blocks, overlord, esqStatus } = args;
+
+  // base: role title + trust band + yoe, all from stored sub-scores.
+  const title = asString(roleFit?.title) || "Candidate";
+  const band = trustBand(score);
+  const yoePart =
+    typeof yoe === "number" && yoe > 0 ? `${yoe} yrs` : "experience unverified";
+  const base = `${band} fit for ${title} (${score}/100, ${yoePart})`;
+
+  // Consider only blocks that actually carry a justification when choosing the
+  // edge/caveat clauses, so an empty model field never becomes the headline.
+  const scored = blocks.filter((b) => b.justification);
+
+  // edge: justification of the highest-scoring block.
+  let edge = "";
+  if (scored.length) {
+    const top = scored.reduce((a, b) => (b.score > a.score ? b : a));
+    edge = `${top.label}: ${top.justification}`;
+  }
+
+  // caveat: justification of the lowest-scoring block, but OVERRIDDEN by an
+  // overlord cap (suspicious/inflated) or an unavailable-evidence note.
+  let caveat = "";
+  if (scored.length) {
+    const low = scored.reduce((a, b) => (b.score < a.score ? b : a));
+    caveat = `${low.label}: ${low.justification}`;
+  }
+  if (esqStatus === "unavailable") {
+    caveat = "ESQ evidence unavailable — scored on resume signal only";
+  } else if (overlord === "inflated_cap_40") {
+    caveat = "Score capped: signals look inflated relative to evidence";
+  } else if (overlord === "suspicious_cap_46") {
+    caveat = "Score capped: claims flagged as suspicious by overlord";
+  }
+
+  // text: one readable sentence. Each clause traces to a stored sub-score.
+  const parts = [base];
+  if (edge) parts.push(`Edge — ${edge}`);
+  if (caveat) parts.push(`Caveat — ${caveat}`);
+  const text = parts.join(". ") + ".";
+
+  return { base, edge, caveat, text };
+}
+
 export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Promise<EvaluationResult> {
   const serverDate = new Date().toISOString().slice(0, 10);
 
@@ -180,6 +268,27 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
 
     log("info", "evaluation.scored", { ...ctx, track: "junior", rawScore, score, overlord, ...(yoe != null ? { yoe } : {}) });
 
+    const juniorProfile = ((jsonBehav.operating_profile as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+    // v2 only: collapse the operating profile into a single recruiter decision
+    // line, stored inside `profile` so persistence/read paths need no changes.
+    if (activeRubricVersion() === "v2") {
+      // esq_status may be added by a sibling unit on either ESQ or behavioral
+      // output — read defensively, don't crash if absent.
+      const esqStatus = esq.esq_status ?? jsonBehav.esq_status;
+      juniorProfile.decision_line = assembleDecisionLine({
+        score,
+        yoe,
+        roleFit: juniorProfile.role_fit as Record<string, unknown> | undefined,
+        blocks: [
+          { label: "ESQ", score: ESQ, justification: justificationOf(esq.justification) },
+          { label: "PDQ", score: PDQ, justification: justificationOf(pdq.justification) },
+          { label: "NR", score: NR, justification: justificationOf(nr.justification) },
+        ],
+        overlord,
+        esqStatus,
+      });
+    }
+
     return {
       score,
       ...(yoe != null && { yoe }),
@@ -188,7 +297,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
         PDQ: { ...pdq, PDQ },
         NR: { ...nr, NR },
       },
-      profile: (jsonBehav.operating_profile as unknown) ?? {},
+      profile: juniorProfile,
       is_matchable: score >= 50,
       overlord,
       rawScore,
@@ -214,7 +323,30 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
   const yoe = safeYoe(json.yoe);
 
   const op = (json.operating_profile as Record<string, unknown> | undefined) ?? {};
-  const profile = { ...op, ramp_expectation: (op as Record<string, unknown>).ramp ?? (op as Record<string, unknown>).ramp_expectation };
+  const useV2 = activeRubricVersion() === "v2";
+  // v1 normalizes the legacy ramp alias; v2 drops the operating dimensions
+  // entirely (role_fit + risk_flags only), so don't reintroduce ramp_expectation.
+  const profile: Record<string, unknown> = useV2
+    ? { ...op }
+    : { ...op, ramp_expectation: (op as Record<string, unknown>).ramp ?? (op as Record<string, unknown>).ramp_expectation };
+
+  if (useV2) {
+    // esq_status is junior-only; on the senior track read it defensively in case
+    // a sibling unit surfaces an analogous field on the senior output.
+    const esqStatus = (json as Record<string, unknown>).esq_status;
+    profile.decision_line = assembleDecisionLine({
+      score,
+      yoe,
+      roleFit: profile.role_fit as Record<string, unknown> | undefined,
+      blocks: [
+        { label: "OM", score: OM, justification: justificationOf(om.justification) },
+        { label: "OD", score: OD, justification: justificationOf(od.justification) },
+        { label: "PC", score: PC, justification: justificationOf(pc.justification) },
+      ],
+      overlord,
+      esqStatus,
+    });
+  }
 
   log("info", "evaluation.scored", { ...ctx, track: "senior", rawScore, score, overlord, ...(yoe != null ? { yoe } : {}) });
 

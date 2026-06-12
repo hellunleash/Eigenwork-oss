@@ -2,7 +2,7 @@ import { COMMON_INSTRUCTIONS } from "./rubric-common";
 import { BLOCK_1_ET_ESQ, BLOCK_2_3_ET_BEHAVIORAL } from "./rubric-junior";
 import { ALL_BLOCKS_EXP } from "./rubric-senior";
 import { OVERLORD_RULES } from "./rubric-overlord";
-import { EXECUTION_CONTEXT } from "./rubric-context";
+import { EXECUTION_CONTEXT, EXECUTION_CONTEXT_V2 } from "./rubric-context";
 
 // Output-schema fragments. Each scoring concern (ESQ / operating profile /
 // overlord) owns its own fragment so rubric changes touch exactly one block;
@@ -36,6 +36,24 @@ export const PROFILE_SCHEMA_FRAGMENT = `"operating_profile": {
     }`;
 
 export const OVERLORD_SCHEMA_FRAGMENT = `"overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40"`;
+
+// Scoring-v2 profile fragment. Keeps the SAME `operating_profile` wrapper so the
+// runner's `json.operating_profile` parsing is unchanged, but DROPS the four
+// operating dimensions (ramp/supervision/stack-transfer/reliability) — v2
+// collapses them into a code-assembled decision line. role_fit is byte-identical
+// to v1 (LOAD-BEARING: match route + rolefit-cache key off its one_liner) and
+// risk_flags is preserved.
+export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
+        "role_fit": {
+          "title": string,
+          "primary": string,
+          "secondary": string[],
+          "tertiary": string[],
+          "one_liner": string
+        },
+
+        "risk_flags": string[]
+    }`;
 
 // Schema builders take the profile/overlord fragments as parameters so the v2
 // path can swap individual fragments (registered in V2_BLOCKS) without any
@@ -86,7 +104,14 @@ export const V2_BLOCKS: {
   schemaJuniorEsq?: string;
   schemaProfileFragment?: string;
   schemaOverlordFragment?: string;
-} = {};
+} = {
+  // Unit D — decision line: v2 drops the 4 operating dimensions from both the
+  // prompt (executionContext) and the output schema (schemaProfileFragment),
+  // keeping only role_fit + risk_flags. The decision line itself is assembled
+  // in code in lib/evaluation-runner.ts.
+  executionContext: EXECUTION_CONTEXT_V2,
+  schemaProfileFragment: PROFILE_SCHEMA_FRAGMENT_V2,
+};
 
 function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
   return useV2 && v2Text ? v2Text : v1Text;
