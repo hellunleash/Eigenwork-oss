@@ -370,7 +370,12 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     const NR = n(nr.C1) + n(nr.C2);
 
     let rawScore = ESQ + PDQ + NR;
-    const overlord = typeof jsonBehav.overlord === "string" ? jsonBehav.overlord : undefined;
+    // Parse BOTH the legacy v1 string and the v2 structured object (the v2 model
+    // emits an object, so a string-only check would silently drop the cap AND
+    // write overlord:undefined). `cap` is the cap-string contract; `verdict` is
+    // the compact structured form persisted only for v2.
+    const parsedOverlord = parseOverlord(jsonBehav.overlord);
+    const overlord = parsedOverlord.cap;
     rawScore = applyOverlordCap(rawScore, overlord, MAX_RAW_SCORE);
     const score = normalizeScore(rawScore);
     const yoe = safeYoe(jsonBehav.yoe);
@@ -408,7 +413,9 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
       },
       profile: juniorProfile,
       is_matchable: score >= 50,
-      overlord,
+      // Omit when absent — Firestore rejects undefined fields on write.
+      ...(overlord != null && { overlord }),
+      ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
       rawScore,
       rubric_version: rubricVersion,
     };
@@ -425,14 +432,26 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
   const OD = n(od.B1) + n(od.B2) + n(od.B3);
   const PC = n(pc.C1) + n(pc.C2) + n(pc.C3);
 
+  const parsedOverlord = parseOverlord(json.overlord);
+  const overlord = parsedOverlord.cap;
+  const useV2 = activeRubricVersion() === "v2";
+  // Senior Overlord runs in SHADOW MODE under v2: the verdict is computed and
+  // persisted (overlord_verdict) but the score is only reduced when
+  // ETI_OVERLORD_ENFORCE_SENIOR is set. v1 keeps its historical always-apply
+  // behavior. appliedCap (what actually moved the score) is what both the
+  // persisted `overlord` field and the decision line report, so a shadowed
+  // verdict never claims a cap it didn't apply.
+  const applySeniorCap = !useV2 || enforceSeniorOverlord();
+  const appliedCap = applySeniorCap ? overlord : undefined;
   let rawScore = OM + OD + PC;
-  const overlord = typeof json.overlord === "string" ? json.overlord : undefined;
-  rawScore = applyOverlordCap(rawScore, overlord, MAX_RAW_SCORE);
+  rawScore = applyOverlordCap(rawScore, appliedCap, MAX_RAW_SCORE);
+  if (useV2 && overlord && !applySeniorCap) {
+    log("info", "overlord.senior_shadow", { ...ctx, wouldCap: overlord, fraudRisk: parsedOverlord.verdict?.fraud_risk });
+  }
   const score = normalizeScore(rawScore);
   const yoe = safeYoe(json.yoe);
 
   const op = (json.operating_profile as Record<string, unknown> | undefined) ?? {};
-  const useV2 = activeRubricVersion() === "v2";
   // v1 normalizes the legacy ramp alias; v2 drops the operating dimensions
   // entirely (role_fit + risk_flags only), so don't reintroduce ramp_expectation.
   const profile: Record<string, unknown> = useV2
@@ -452,7 +471,7 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
         { label: "OD", score: OD, justification: justificationOf(od.justification) },
         { label: "PC", score: PC, justification: justificationOf(pc.justification) },
       ],
-      overlord,
+      overlord: appliedCap,
       esqStatus,
     });
   }
@@ -469,7 +488,10 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     },
     profile,
     is_matchable: score >= 50,
-    overlord,
+    // Persist the cap actually applied (undefined when shadowed) and the full
+    // verdict for audit. Both omitted when absent (Firestore rejects undefined).
+    ...(appliedCap != null && { overlord: appliedCap }),
+    ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
     rawScore,
     rubric_version: rubricVersion,
   };
@@ -556,7 +578,8 @@ async function runJuniorV2(
   const nr = (jsonBehav.nr_breakdown as Record<string, unknown> | undefined) ?? {};
   const PDQ = n(pdq.B1) + n(pdq.B2) + n(pdq.B3);
   const NR = n(nr.C1) + n(nr.C2);
-  const overlord = typeof jsonBehav.overlord === "string" ? jsonBehav.overlord : undefined;
+  const parsedOverlord = parseOverlord(jsonBehav.overlord);
+  const overlord = parsedOverlord.cap;
   const yoe = safeYoe(jsonBehav.yoe);
 
   // --- esq_status normalization policy ---
@@ -584,6 +607,24 @@ async function runJuniorV2(
     ...(yoe != null ? { yoe } : {}),
   });
 
+  // v2 decision line: collapse the operating profile into one recruiter line
+  // (base + edge + caveat), assembled deterministically from the sub-scores just
+  // computed. Stored inside `profile` so the read/UI paths are unchanged. When
+  // esqStatus is "unavailable" the caveat surfaces the missing-evidence note.
+  const juniorProfile = ((jsonBehav.operating_profile as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+  juniorProfile.decision_line = assembleDecisionLine({
+    score,
+    yoe,
+    roleFit: juniorProfile.role_fit as Record<string, unknown> | undefined,
+    blocks: [
+      { label: "ESQ", score: ESQ, justification: justificationOf(esq.justification) },
+      { label: "PDQ", score: PDQ, justification: justificationOf(pdq.justification) },
+      { label: "NR", score: NR, justification: justificationOf(nr.justification) },
+    ],
+    overlord,
+    esqStatus,
+  });
+
   return {
     score,
     ...(yoe != null && { yoe }),
@@ -592,9 +633,11 @@ async function runJuniorV2(
       PDQ: { ...pdq, PDQ },
       NR: { ...nr, NR },
     },
-    profile: (jsonBehav.operating_profile as unknown) ?? {},
+    profile: juniorProfile,
     is_matchable: score >= 50,
-    overlord,
+    // Omit when absent — Firestore rejects undefined fields on write.
+    ...(overlord != null && { overlord }),
+    ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
     rawScore,
     rubric_version: rubricVersion,
     esq_status: esqStatus,

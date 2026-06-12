@@ -6,6 +6,7 @@
 .gcloudignore
 .next
 .vercel
+.claude
 node_modules
 .env
 .env.local
