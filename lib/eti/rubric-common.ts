@@ -36,3 +36,25 @@ tied to real responsibilities
 tied to real system components
 tied to debugging or operational behavior
 `;
+
+// --- COMMON INSTRUCTIONS (v2: v1 rules + AI-polish neutralization) ---
+// Identical global rules to v1, PLUS rule 6 hardening scores against fluent AI-written prose
+// and AI-fabricated plausible specificity. Keep this in sync with COMMON_INSTRUCTIONS for rules 1-5.
+export const COMMON_INSTRUCTIONS_V2 =
+  COMMON_INSTRUCTIONS +
+  `
+6. Neutralize AI Polish (Prose Quality Earns Nothing)
+Fluent, well-structured, or confident writing is NOT evidence and MUST NOT raise any score.
+Only VERIFIABLE specifics score: named systems/services/tools tied to real responsibility,
+real numbers (scale, latency, volume, %, dates), and concrete failure/decision/debugging stories.
+
+AI-fabricated specificity defense:
+- Generic-sounding "specifics" that name NO real system AND cite NO real number are treated as
+  vague — they earn NO credit even if phrased precisely or confidently.
+- A polished sentence describing "complex distributed systems" or "high-impact optimizations"
+  with no named system and no number = vague claim, not a specific.
+- This applies especially to NR-C1 (Specificity): plausible-but-unnamed detail CANNOT cross into
+  the upper bands. Reaching the upper bands requires at least one named system or real number.
+- When uncertain whether a detail is real or AI-generated polish, treat it as polish (no credit),
+  consistent with the risk-management posture. Never penalize beyond withholding the credit.
+`;

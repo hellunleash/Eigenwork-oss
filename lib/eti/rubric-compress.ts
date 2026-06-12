@@ -1,6 +1,6 @@
-import { COMMON_INSTRUCTIONS } from "./rubric-common";
-import { BLOCK_1_ET_ESQ, BLOCK_2_3_ET_BEHAVIORAL } from "./rubric-junior";
-import { ALL_BLOCKS_EXP } from "./rubric-senior";
+import { COMMON_INSTRUCTIONS, COMMON_INSTRUCTIONS_V2 } from "./rubric-common";
+import { BLOCK_1_ET_ESQ, BLOCK_2_3_ET_BEHAVIORAL, BLOCK_2_3_ET_BEHAVIORAL_V2 } from "./rubric-junior";
+import { ALL_BLOCKS_EXP, ALL_BLOCKS_EXP_V2 } from "./rubric-senior";
 import { OVERLORD_RULES } from "./rubric-overlord";
 import { EXECUTION_CONTEXT } from "./rubric-context";
 
@@ -86,7 +86,12 @@ export const V2_BLOCKS: {
   schemaJuniorEsq?: string;
   schemaProfileFragment?: string;
   schemaOverlordFragment?: string;
-} = {};
+} = {
+  // Unit B (role-family anchors + anchored scales): de-biased, anchored rubric text.
+  common: COMMON_INSTRUCTIONS_V2,
+  juniorBehavioral: BLOCK_2_3_ET_BEHAVIORAL_V2,
+  senior: ALL_BLOCKS_EXP_V2
+};
 
 function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
   return useV2 && v2Text ? v2Text : v1Text;
