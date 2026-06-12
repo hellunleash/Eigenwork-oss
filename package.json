@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "diagnose:github": "node scripts/diagnose-github.mjs",
+    "diagnose:signals": "node scripts/diagnose-signals.mjs",
     "diagnose:match": "node scripts/diagnose-match.mjs",
     "serve": "npm run build && firebase emulators:start --only functions,hosting",
     "deploy": "firebase deploy"

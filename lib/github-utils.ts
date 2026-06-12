@@ -98,7 +98,10 @@ async function fetchInstallationToken(): Promise<string> {
   return data.token;
 }
 
-async function getGithubAuthHeader(): Promise<string | null> {
+// Exported so lib/github-signals.ts (ESQ v2) can reuse the exact same auth
+// resolution (GitHub App installation token → PAT fallback) instead of
+// re-implementing token signing. Do NOT duplicate the auth logic elsewhere.
+export async function getGithubAuthHeader(): Promise<string | null> {
   if (GITHUB_APP_ISSUER && GITHUB_APP_INSTALLATION_ID && GITHUB_APP_PRIVATE_KEY) {
     const now = Date.now();
     if (cachedInstallationToken && cachedInstallationToken.expiresAtMs - now > 5 * 60 * 1000) {
@@ -354,7 +357,7 @@ function stripDotGit(repo: string): string {
   return repo.replace(/\.git$/i, "");
 }
 
-function parseGithubUrl(url: string): { owner: string; repo: string } | null {
+export function parseGithubUrl(url: string): { owner: string; repo: string } | null {
   // SSH clone form "git@github.com:owner/repo(.git)" — URL() can't parse it.
   const ssh = (url || "").trim().match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
   if (ssh) return { owner: ssh[1], repo: stripDotGit(ssh[2]) };
@@ -368,7 +371,7 @@ function parseGithubUrl(url: string): { owner: string; repo: string } | null {
 }
 
 /** Returns { username } for profile URLs like https://github.com/waifuexists */
-function parseGithubUserUrl(url: string): { username: string } | null {
+export function parseGithubUserUrl(url: string): { username: string } | null {
   const u = normalizeGithubUrl(url);
   if (!u) return null;
   const parts = u.pathname.split("/").filter(Boolean);
