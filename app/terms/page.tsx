@@ -52,7 +52,7 @@ export default function TermsPage() {
                   <li>View evaluation results, including ETI scores, role fit assessments, and candidate profiles</li>
                 </ul>
                 <p className="mt-2">
-                  The Platform uses artificial intelligence (AI) models, including Google Gemini AI, to analyze candidate resumes, GitHub repositories (for junior candidates), and other submitted materials to generate evaluation scores and insights. The Platform does not make hiring decisions on your behalf—it provides evaluation data to assist your decision-making process.
+                  The Platform uses artificial intelligence (AI) models, including Google Gemini AI, to analyze candidate resumes and other submitted materials to generate evaluation scores and insights. For junior candidates, GitHub repositories are analyzed using metadata and locally-computed (CPU-only) pattern counts; repository code itself is not sent to the AI model (see the Privacy Policy for details). The Platform does not make hiring decisions on your behalf—it provides evaluation data to assist your decision-making process.
                 </p>
               </div>
 
@@ -107,7 +107,7 @@ export default function TermsPage() {
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li><strong>Google Gemini AI (gemini-2.5-flash):</strong> Used for candidate evaluation, role-fit matching, and job description parsing</li>
                   <li><strong>Google Document AI:</strong> Used to extract text from resume PDFs</li>
-                  <li><strong>GitHub API:</strong> Used to analyze code repositories for junior candidates (when GitHub URLs are provided)</li>
+                  <li><strong>GitHub API:</strong> Used to read repository metadata and code for junior candidates (when GitHub URLs are provided); code is processed locally for pattern counting and is not sent to the AI model</li>
                   <li><strong>Firebase (Google):</strong> Used for authentication, data storage (Firestore), and file storage (Storage)</li>
                   <li><strong>Paddle:</strong> Used for payment processing</li>
                 </ul>
@@ -238,8 +238,8 @@ export default function TermsPage() {
                 </p>
                 <ul className="list-disc pl-6 mt-2 space-y-1">
                   <li><strong>Resume Processing:</strong> Resume PDFs are sent to Google Document AI to extract text content. The extracted text is then processed by Google Gemini AI for evaluation.</li>
-                  <li><strong>GitHub Analysis:</strong> For junior candidates who provide GitHub URLs, we access their public repositories via the GitHub API to analyze code structure and quality. This data is processed by Google Gemini AI to generate ESQ scores.</li>
-                  <li><strong>Evaluation:</strong> Candidate information, resume text, and GitHub data (when available) are sent to Google Gemini AI to generate ETI scores, role-fit assessments, and evaluation breakdowns.</li>
+                  <li><strong>GitHub Analysis:</strong> For junior candidates who provide GitHub URLs, we access their public repositories via the GitHub API and analyze repository <strong>metadata</strong> (file structure, commit history, dependency manifests) together with <strong>pattern counts</strong> derived from automated text/regex matching over the code. This pattern counting runs locally on our servers (CPU only). Repository <strong>file content is never sent to the LLM (Google Gemini)</strong>; only the resulting non-code signal summary is used to generate ESQ scores.</li>
+                  <li><strong>Evaluation:</strong> Candidate information, resume text, and the GitHub <strong>signal summary</strong> described above (when available, never raw repository code) are sent to Google Gemini AI to generate ETI scores, role-fit assessments, and evaluation breakdowns.</li>
                   <li><strong>Role Matching:</strong> Job descriptions and candidate profiles are compared using Google Gemini AI to determine role-fit compatibility.</li>
                 </ul>
                 <p className="mt-2">
