@@ -37,6 +37,90 @@ export function applyOverlordCap(rawScore: number, overlord: string | undefined,
   return rawScore;
 }
 
+// Compact, persisted form of the v2 structured Overlord verdict. Kept small on
+// purpose (a verdict + risk + a short trigger list) so it is cheap to store and
+// to return from the owner API; JD-match uses .select() and never reads it.
+export type OverlordTrigger = { id: string; reason: string };
+export type OverlordVerdict = {
+  verdict: "safe" | "suspicious" | "inflated";
+  fraud_risk: number;
+  triggered: OverlordTrigger[];
+};
+
+// Normalized result of parsing whatever the model returned for "overlord".
+//   cap      — the legacy cap-string contract fed to applyOverlordCap.
+//   verdict  — the compact structured verdict, present only for v2 object form.
+export type ParsedOverlord = {
+  cap: string | undefined;
+  verdict?: OverlordVerdict;
+};
+
+// fraud_risk -> cap thresholds. >=0.66 inflated (cap-40), >=0.4 suspicious
+// (cap-46), else safe. Mirrors the v1 numeric outcomes via the same cap strings.
+const OVERLORD_INFLATED_THRESHOLD = 0.66;
+const OVERLORD_SUSPICIOUS_THRESHOLD = 0.4;
+
+function capFromVerdict(verdict: OverlordVerdict["verdict"], fraudRisk: number): string | undefined {
+  // Prefer fraud_risk (the model may disagree with its own verdict label); fall
+  // back to the verdict word if fraud_risk is missing/out of range.
+  if (Number.isFinite(fraudRisk)) {
+    if (fraudRisk >= OVERLORD_INFLATED_THRESHOLD) return "inflated_cap_40";
+    if (fraudRisk >= OVERLORD_SUSPICIOUS_THRESHOLD) return "suspicious_cap_46";
+    return undefined; // safe
+  }
+  if (verdict === "inflated") return "inflated_cap_40";
+  if (verdict === "suspicious") return "suspicious_cap_46";
+  return undefined;
+}
+
+// Tolerant parse of the model's "overlord" output. Accepts BOTH:
+//   - the legacy v1 bare string ("safe" | "suspicious_cap_46" | "inflated_cap_40"),
+//     which yields the EXACT v1 cap outcome and no structured verdict; and
+//   - the v2 structured object { verdict, fraud_risk, triggered[] }, from which
+//     the cap is derived in code (the model never picks the number).
+// Anything else (missing/garbage) parses to "safe" (no cap, no verdict).
+export function parseOverlord(raw: unknown): ParsedOverlord {
+  if (typeof raw === "string") {
+    // Legacy string contract — pass through unchanged for v1 compatibility.
+    return { cap: raw === "inflated_cap_40" || raw === "suspicious_cap_46" ? raw : undefined };
+  }
+  if (raw && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    const verdictWord = o.verdict === "inflated" || o.verdict === "suspicious" ? o.verdict : "safe";
+    const fr = typeof o.fraud_risk === "number" ? o.fraud_risk : Number(o.fraud_risk);
+    const fraud_risk = Number.isFinite(fr) ? Math.min(1, Math.max(0, fr)) : NaN;
+    const triggered: OverlordTrigger[] = Array.isArray(o.triggered)
+      ? o.triggered
+          .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
+          .map((t) => ({ id: String(t.id ?? ""), reason: String(t.reason ?? "") }))
+          .filter((t) => t.id || t.reason)
+      : [];
+    const cap = capFromVerdict(verdictWord, fraud_risk);
+    // Re-derive the verdict word from the cap so the persisted verdict and the
+    // applied cap can never disagree (fraud_risk is the source of truth).
+    const finalVerdict: OverlordVerdict["verdict"] =
+      cap === "inflated_cap_40" ? "inflated" : cap === "suspicious_cap_46" ? "suspicious" : "safe";
+    return {
+      cap,
+      verdict: {
+        verdict: finalVerdict,
+        fraud_risk: Number.isFinite(fraud_risk) ? fraud_risk : 0,
+        triggered,
+      },
+    };
+  }
+  return { cap: undefined };
+}
+
+// Senior Overlord ships in SHADOW MODE: v2 runs the check on seniors but only
+// APPLIES the cap when ETI_OVERLORD_ENFORCE_SENIOR is truthy. Off (default) we
+// log the would-be cap without reducing the senior score. Junior caps always
+// apply. Read per-call so the flag can be flipped without a redeploy.
+export function enforceSeniorOverlord(): boolean {
+  const v = process.env.ETI_OVERLORD_ENFORCE_SENIOR;
+  return v === "1" || v === "true" || v === "TRUE";
+}
+
 function safeYoe(value: unknown): number | undefined {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 99.9) return undefined;
@@ -122,6 +206,10 @@ export type EvaluationResult = {
   profile: unknown;
   is_matchable: boolean;
   overlord?: string;
+  // Compact v2 structured verdict (verdict + fraud_risk + short trigger list).
+  // Present only when the model returned the structured object form; v1 string
+  // results carry only the legacy `overlord` field above.
+  overlord_verdict?: OverlordVerdict;
   rawScore?: number;
   rubric_version: RubricVersion;
   // ESQ evidence status (junior v2 only). Persisted via the `...result` spread

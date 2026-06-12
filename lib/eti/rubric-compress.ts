@@ -1,7 +1,7 @@
 import { COMMON_INSTRUCTIONS, COMMON_INSTRUCTIONS_V2 } from "./rubric-common";
 import { BLOCK_1_ET_ESQ, BLOCK_1_ET_ESQ_V2, BLOCK_2_3_ET_BEHAVIORAL, BLOCK_2_3_ET_BEHAVIORAL_V2 } from "./rubric-junior";
 import { ALL_BLOCKS_EXP, ALL_BLOCKS_EXP_V2 } from "./rubric-senior";
-import { OVERLORD_RULES } from "./rubric-overlord";
+import { OVERLORD_RULES, OVERLORD_RULES_V2 } from "./rubric-overlord";
 import { EXECUTION_CONTEXT } from "./rubric-context";
 
 // Output-schema fragments. Each scoring concern (ESQ / operating profile /
@@ -36,6 +36,15 @@ export const PROFILE_SCHEMA_FRAGMENT = `"operating_profile": {
     }`;
 
 export const OVERLORD_SCHEMA_FRAGMENT = `"overlord": "safe" | "suspicious_cap_46" | "inflated_cap_40"`;
+
+// Scoring-v2 overlord output schema. Replaces the bare-string overlord field
+// with a structured object; the numeric cap is derived in code from fraud_risk
+// (see applyOverlordCap in lib/evaluation-runner.ts), never emitted by the model.
+export const OVERLORD_SCHEMA_FRAGMENT_V2 = `"overlord": {
+      "verdict": "safe" | "suspicious" | "inflated",
+      "fraud_risk": number,
+      "triggered": [ { "id": string, "reason": "short phrase(<=12words)" } ]
+    }`;
 
 // Schema builders take the profile/overlord fragments as parameters so the v2
 // path can swap individual fragments (registered in V2_BLOCKS) without any
@@ -97,7 +106,11 @@ export const V2_BLOCKS: {
   // Unit B (role-family anchors + anchored scales): de-biased, anchored rubric text.
   common: COMMON_INSTRUCTIONS_V2,
   juniorBehavioral: BLOCK_2_3_ET_BEHAVIORAL_V2,
-  senior: ALL_BLOCKS_EXP_V2
+  senior: ALL_BLOCKS_EXP_V2,
+  // Unit C — Overlord v2: structured verdict + new AI-metric/template-slop
+  // detectors. The runner derives the numeric cap from fraud_risk.
+  overlord: OVERLORD_RULES_V2,
+  schemaOverlordFragment: OVERLORD_SCHEMA_FRAGMENT_V2,
 };
 
 function pick(useV2: boolean, v2Text: string | undefined, v1Text: string): string {
