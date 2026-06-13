@@ -9,7 +9,14 @@
 // Source of truth for the banned-token list (ADR-007 §8). Mirrored verbatim
 // in scripts/migrate-legacy-cards.mjs so the legacy edge derivation strips
 // the same prefixes.
-export const BANNED_TOKEN_RE = /ESQ|PDQ|NR|OM|OD|PC|rubric|block|justification/i;
+//
+// Word boundaries are REQUIRED: without \b, the two-letter labels (OM / OD
+// / PC / NR) match as substrings inside ordinary English ("compliance" has
+// "om", "code" has "od", "earner" has "nr", "specific" has "pc"), causing
+// every recruiter-friendly edge to be falsely rejected and the fallback to
+// fire on a downstream block justification. Pluralized forms covered for
+// "rubrics" / "blocks" / "justifications" so common plurals don't slip past.
+export const BANNED_TOKEN_RE = /\b(ESQ|PDQ|NR|OM|OD|PC|rubrics?|blocks?|justifications?)\b/i;
 
 export function isUsefulString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
