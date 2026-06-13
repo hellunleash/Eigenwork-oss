@@ -1,6 +1,14 @@
 import { runJsonModel } from "@/lib/openai-client";
 import { getRepoDNA } from "@/lib/github-utils";
-import { getGithubSignal, type EsqSignalStatus } from "@/lib/github-signals";
+import { getGithubSignal, type EsqSignalStatus, type GithubSignalMetrics } from "@/lib/github-signals";
+import {
+  assembleCardPayload,
+  type Card,
+  type WorkHistoryEntry,
+  type RoleFitLike,
+  type DecisionBlock as CardDecisionBlock,
+} from "@/lib/cards/fallback";
+import { upsertBrandCacheBatch, type BrandBucket } from "@/lib/cards/brand-cache";
 import { extractResumeText } from "@/lib/docai-extract";
 import { buildETIPrompt, truncateInput, cleanAndParseJSON } from "@/lib/eti/rubric-compress";
 import { log, type LogContext, timeMs } from "@/lib/server-logger";
@@ -220,6 +228,20 @@ export type EvaluationResult = {
   // - no_evidence : no/404/empty/forks-only GitHub; ESQ=0 over 85 (ceiling ~59).
   // Undefined on the v1 path and the senior path.
   esq_status?: EsqSignalStatus;
+  // Card payload (ADR-007). title + edge + optional flag, recruiter-facing.
+  // Populated by assembleCardPayload from the model's title/edge/flag fields
+  // with per-slot deterministic fallback. Only set on v2 paths once Phase 4
+  // wires it up; v1 paths never set it.
+  card?: Card;
+  // Structured GitHub metrics (junior v2 only). Surfaced in the result card's
+  // Signals panel. Omitted on senior (no GitHub) and on junior runs where
+  // getGithubSignal returned no metrics (unavailable / no_evidence).
+  github_metrics?: GithubSignalMetrics;
+  // Structured employment timeline (both tracks once Phase 4 lands). One entry
+  // per role with employer / title / dates / scope_one_liner / brand_bucket.
+  // Surfaced in the result card's Signals panel and read by the title-fallback
+  // path. Empty array is a valid value ("no employment history listed").
+  work_history?: WorkHistoryEntry[];
 };
 
 function n(v: unknown): number {
@@ -227,92 +249,60 @@ function n(v: unknown): number {
   return Number.isFinite(x) ? x : 0;
 }
 
-// ── Decision line (scoring v2) ───────────────────────────────────────────────
-// v2 replaces the operating-profile reading chore with a single decisive
-// recruiter line: base + edge + caveat. It is assembled deterministically in
-// code AFTER all model calls return — every clause traces to an already-computed
-// sub-score, so it adds no LLM cost and cannot drift from the numbers shown.
-// The shape ({ base, edge, caveat, text }) is a self-contained ATS write-back
-// payload: one `text` sentence plus the structured parts.
-export type DecisionLine = {
-  base: string;
-  edge: string;
-  caveat: string;
-  text: string;
-};
+// ── Card assembly (ADR-007) ──────────────────────────────────────────────────
+// v2 emits the recruiter-facing title/edge/flag strings INSIDE the model's
+// operating_profile output, alongside the existing role_fit + risk_flags.
+// extractCardInputs pulls them out plus the structured work_history (emitted
+// by the overlord step) so assembleCardPayload (in lib/cards/fallback.ts) can
+// validate each and substitute the per-slot CPU fallback when a field is
+// missing or contains banned tokens. Brand-cache upserts run fire-and-forget
+// off the same work_history list.
 
-// One scored block + its model justification. base/edge/caveat are picked from
-// these: edge = highest-scoring block's justification, caveat = lowest's.
-type DecisionBlock = { label: string; score: number; justification: string };
-
-// Trust band derived from the normalized 0–100 score. Bands: <50 / 50–64 /
-// 65–79 / 80+ (matches is_matchable's 50 cutoff at the low edge).
-function trustBand(score: number): string {
-  if (score >= 80) return "Strong";
-  if (score >= 65) return "Solid";
-  if (score >= 50) return "Borderline";
-  return "Weak";
+function extractWorkHistory(raw: unknown): WorkHistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: WorkHistoryEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const e = item as Record<string, unknown>;
+    const employer = typeof e.employer === "string" ? e.employer.trim() : "";
+    if (!employer) continue; // entries without an employer carry no signal
+    const entry: WorkHistoryEntry = { employer };
+    if (typeof e.title === "string" && e.title.trim()) entry.title = e.title.trim();
+    if (typeof e.start === "string" && e.start.trim()) entry.start = e.start.trim();
+    if (typeof e.end === "string" && e.end.trim()) entry.end = e.end.trim();
+    if (typeof e.scope_one_liner === "string" && e.scope_one_liner.trim()) {
+      entry.scope_one_liner = e.scope_one_liner.trim();
+    }
+    const bucket = e.brand_bucket;
+    entry.brand_bucket =
+      bucket === "FAANG" || bucket === "YC" || bucket === "tier-1" ? bucket : null;
+    out.push(entry);
+  }
+  return out;
 }
 
-function justificationOf(v: unknown): string {
-  return typeof v === "string" && v.trim() ? v.trim() : "";
+// Filter work_history down to entries with a real brand bucket so the cache
+// upsert never writes nulls. Returns inputs in the shape upsertBrandCacheBatch
+// expects.
+function bucketedForCache(
+  workHistory: WorkHistoryEntry[]
+): { employer: string; bucket: BrandBucket }[] {
+  const out: { employer: string; bucket: BrandBucket }[] = [];
+  for (const entry of workHistory) {
+    if (!entry.employer) continue;
+    const b = entry.brand_bucket;
+    if (b === "FAANG" || b === "YC" || b === "tier-1") {
+      out.push({ employer: entry.employer, bucket: b });
+    }
+  }
+  return out;
 }
 
-function asString(v: unknown): string {
+// Coerce model JSON values into the safe-string shape DecisionBlock expects.
+// Empty / missing fields are passed through as "" — fallbackEdge filters
+// them out (see isUsefulString in lib/cards/validate.ts).
+function safeJustification(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
-}
-
-// Deterministic decision line from already-computed sub-scores. No model call.
-function assembleDecisionLine(args: {
-  score: number;
-  yoe?: number;
-  roleFit: Record<string, unknown> | undefined;
-  blocks: DecisionBlock[];
-  overlord: string | undefined;
-  esqStatus?: unknown; // may be added by a sibling unit; read defensively
-}): DecisionLine {
-  const { score, yoe, roleFit, blocks, overlord, esqStatus } = args;
-
-  // base: role title + trust band + yoe, all from stored sub-scores.
-  const title = asString(roleFit?.title) || "Candidate";
-  const band = trustBand(score);
-  const yoePart =
-    typeof yoe === "number" && yoe > 0 ? `${yoe} yrs` : "experience unverified";
-  const base = `${band} fit for ${title} (${score}/100, ${yoePart})`;
-
-  // Consider only blocks that actually carry a justification when choosing the
-  // edge/caveat clauses, so an empty model field never becomes the headline.
-  const scored = blocks.filter((b) => b.justification);
-
-  // edge: justification of the highest-scoring block.
-  let edge = "";
-  if (scored.length) {
-    const top = scored.reduce((a, b) => (b.score > a.score ? b : a));
-    edge = `${top.label}: ${top.justification}`;
-  }
-
-  // caveat: justification of the lowest-scoring block, but OVERRIDDEN by an
-  // overlord cap (suspicious/inflated) or an unavailable-evidence note.
-  let caveat = "";
-  if (scored.length) {
-    const low = scored.reduce((a, b) => (b.score < a.score ? b : a));
-    caveat = `${low.label}: ${low.justification}`;
-  }
-  if (esqStatus === "unavailable") {
-    caveat = "ESQ evidence unavailable — scored on resume signal only";
-  } else if (overlord === "inflated_cap_40") {
-    caveat = "Score capped: signals look inflated relative to evidence";
-  } else if (overlord === "suspicious_cap_46") {
-    caveat = "Score capped: claims flagged as suspicious by overlord";
-  }
-
-  // text: one readable sentence. Each clause traces to a stored sub-score.
-  const parts = [base];
-  if (edge) parts.push(`Edge — ${edge}`);
-  if (caveat) parts.push(`Caveat — ${caveat}`);
-  const text = parts.join(". ") + ".";
-
-  return { base, edge, caveat, text };
 }
 
 export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Promise<EvaluationResult> {
@@ -383,25 +373,8 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     log("info", "evaluation.scored", { ...ctx, track: "junior", rawScore, score, overlord, ...(yoe != null ? { yoe } : {}) });
 
     const juniorProfile = ((jsonBehav.operating_profile as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
-    // v2 only: collapse the operating profile into a single recruiter decision
-    // line, stored inside `profile` so persistence/read paths need no changes.
-    if (activeRubricVersion() === "v2") {
-      // esq_status may be added by a sibling unit on either ESQ or behavioral
-      // output — read defensively, don't crash if absent.
-      const esqStatus = esq.esq_status ?? jsonBehav.esq_status;
-      juniorProfile.decision_line = assembleDecisionLine({
-        score,
-        yoe,
-        roleFit: juniorProfile.role_fit as Record<string, unknown> | undefined,
-        blocks: [
-          { label: "ESQ", score: ESQ, justification: justificationOf(esq.justification) },
-          { label: "PDQ", score: PDQ, justification: justificationOf(pdq.justification) },
-          { label: "NR", score: NR, justification: justificationOf(nr.justification) },
-        ],
-        overlord,
-        esqStatus,
-      });
-    }
+    // Junior v1 path: no card field, no decision_line. v2 juniors are routed
+    // to runJuniorV2 above; this branch only handles v1.
 
     return {
       score,
@@ -458,21 +431,32 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     ? { ...op }
     : { ...op, ramp_expectation: (op as Record<string, unknown>).ramp ?? (op as Record<string, unknown>).ramp_expectation };
 
+  // ADR-007 (Phase 4): card assembly is v2-only. v1 ships without a card
+  // field. The legacy decision_line path is fully retired.
+  let seniorCard: Card | undefined;
+  let seniorWorkHistory: WorkHistoryEntry[] | undefined;
   if (useV2) {
-    // esq_status is junior-only; on the senior track read it defensively in case
-    // a sibling unit surfaces an analogous field on the senior output.
-    const esqStatus = (json as Record<string, unknown>).esq_status;
-    profile.decision_line = assembleDecisionLine({
-      score,
-      yoe,
-      roleFit: profile.role_fit as Record<string, unknown> | undefined,
+    const overlordRaw = (json.overlord ?? {}) as Record<string, unknown>;
+    seniorWorkHistory = extractWorkHistory(overlordRaw.work_history);
+    seniorCard = await assembleCardPayload({
+      modelTitle: profile.title,
+      modelEdge: profile.edge,
+      modelFlag: profile.flag,
+      roleFit: profile.role_fit as RoleFitLike | undefined,
+      workHistory: seniorWorkHistory,
       blocks: [
-        { label: "OM", score: OM, justification: justificationOf(om.justification) },
-        { label: "OD", score: OD, justification: justificationOf(od.justification) },
-        { label: "PC", score: PC, justification: justificationOf(pc.justification) },
-      ],
-      overlord: appliedCap,
-      esqStatus,
+        { label: "OM", score: OM, justification: safeJustification(om.justification) },
+        { label: "OD", score: OD, justification: safeJustification(od.justification) },
+        { label: "PC", score: PC, justification: safeJustification(pc.justification) },
+      ] satisfies CardDecisionBlock[],
+      overlord: parsedOverlord.verdict,
+      // Senior track never calls getGithubSignal — pass null so the flag
+      // fallback's all_in_one_day rule cannot fire on this branch.
+      githubMetrics: null,
+      track: "senior",
+    });
+    void upsertBrandCacheBatch(bucketedForCache(seniorWorkHistory), {
+      firstSeenCandidate: ctx.candidateId,
     });
   }
 
@@ -492,6 +476,10 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     // verdict for audit. Both omitted when absent (Firestore rejects undefined).
     ...(appliedCap != null && { overlord: appliedCap }),
     ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
+    // v2-only: persist the work_history list (drives the Signals panel and
+    // the brand-cache reads) and the card payload (title + edge + flag).
+    ...(seniorWorkHistory != null && { work_history: seniorWorkHistory }),
+    ...(seniorCard != null && { card: seniorCard }),
     rawScore,
     rubric_version: rubricVersion,
   };
@@ -535,12 +523,18 @@ async function runJuniorV2(
   // --- GitHub signal (deterministic, ≤2 API calls; never sends code to an LLM) ---
   let esqStatus: EsqSignalStatus = "no_evidence";
   let signalSummary = "No GitHub evidence available.";
+  // Capture the structured metrics object so it can be persisted on the
+  // candidate doc and surfaced in the result card's Signals panel (ADR-007 §5).
+  // Populated only when signal.status === "ok"; null for unavailable / no_evidence
+  // (those branches don't carry metrics).
+  let githubMetrics: GithubSignalMetrics | null = null;
   if (input.githubUrl) {
     const t = timeMs();
     try {
       const signal = await getGithubSignal(input.githubUrl);
       esqStatus = signal.status;
       signalSummary = signal.summaryText;
+      if (signal.metrics) githubMetrics = signal.metrics;
       log("info", "github.signal_done", { ...ctx, latencyMs: t(), esqStatus, apiCalls: signal.apiCalls });
     } catch (e) {
       // Any unexpected throw is treated as a transient outage, not absence.
@@ -607,22 +601,35 @@ async function runJuniorV2(
     ...(yoe != null ? { yoe } : {}),
   });
 
-  // v2 decision line: collapse the operating profile into one recruiter line
-  // (base + edge + caveat), assembled deterministically from the sub-scores just
-  // computed. Stored inside `profile` so the read/UI paths are unchanged. When
-  // esqStatus is "unavailable" the caveat surfaces the missing-evidence note.
+  // ADR-007 (Phase 4): the result card replaces the deterministic decision
+  // line. Extract the model's title/edge/flag from operating_profile and
+  // work_history from overlord, then assemble with per-slot CPU fallback.
+  // The fallback never depends on the model output it is replacing — it
+  // reads only the persisted sub-scores, overlord verdict, github_metrics,
+  // work_history, and brand_cache.
   const juniorProfile = ((jsonBehav.operating_profile as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
-  juniorProfile.decision_line = assembleDecisionLine({
-    score,
-    yoe,
-    roleFit: juniorProfile.role_fit as Record<string, unknown> | undefined,
+  const overlordRaw = (jsonBehav.overlord ?? {}) as Record<string, unknown>;
+  const workHistory = extractWorkHistory(overlordRaw.work_history);
+  const card = await assembleCardPayload({
+    modelTitle: juniorProfile.title,
+    modelEdge: juniorProfile.edge,
+    modelFlag: juniorProfile.flag,
+    roleFit: juniorProfile.role_fit as RoleFitLike | undefined,
+    workHistory,
     blocks: [
-      { label: "ESQ", score: ESQ, justification: justificationOf(esq.justification) },
-      { label: "PDQ", score: PDQ, justification: justificationOf(pdq.justification) },
-      { label: "NR", score: NR, justification: justificationOf(nr.justification) },
-    ],
-    overlord,
-    esqStatus,
+      { label: "ESQ", score: ESQ, justification: safeJustification(esq.justification) },
+      { label: "PDQ", score: PDQ, justification: safeJustification(pdq.justification) },
+      { label: "NR", score: NR, justification: safeJustification(nr.justification) },
+    ] satisfies CardDecisionBlock[],
+    overlord: parsedOverlord.verdict,
+    githubMetrics,
+    track: "junior",
+  });
+
+  // Brand-cache upserts grow the brand_cache Firestore collection passively
+  // (ADR-007 §6). Fire-and-forget — the evaluation response does not wait.
+  void upsertBrandCacheBatch(bucketedForCache(workHistory), {
+    firstSeenCandidate: ctx.candidateId,
   });
 
   return {
@@ -638,6 +645,9 @@ async function runJuniorV2(
     // Omit when absent — Firestore rejects undefined fields on write.
     ...(overlord != null && { overlord }),
     ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
+    ...(githubMetrics != null && { github_metrics: githubMetrics }),
+    work_history: workHistory,
+    card,
     rawScore,
     rubric_version: rubricVersion,
     esq_status: esqStatus,

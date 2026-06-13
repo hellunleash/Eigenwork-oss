@@ -180,6 +180,13 @@ C2 Claim Realism (0–10)
 export const BLOCK_2_3_ET_BEHAVIORAL_V2 = `
 ${ROLE_ANCHORS}
 
+JUSTIFICATION VOICE (applies to pdq_breakdown.justification and nr_breakdown.justification):
+- <=25 words each.
+- Recruiter language only. NEVER use the rubric labels ESQ, PDQ, NR, OM, OD, PC,
+  or the words "rubric", "block", "justification" — these have no meaning to
+  recruiters and the downstream card path falls back when they appear.
+- Cite specific evidence (project verbs, named systems/tools, employer + role).
+
 BLOCK 2 — ET PDQ (pdq_breakdown: B1-B3)
 You are evaluating problem-solving ability for an Early Talent candidate.
 Use ONLY resume, projectDescriptions, and selfDescription as evidence.

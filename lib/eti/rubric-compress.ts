@@ -40,10 +40,23 @@ export const OVERLORD_SCHEMA_FRAGMENT = `"overlord": "safe" | "suspicious_cap_46
 // Scoring-v2 overlord output schema. Replaces the bare-string overlord field
 // with a structured object; the numeric cap is derived in code from fraud_risk
 // (see applyOverlordCap in lib/evaluation-runner.ts), never emitted by the model.
+// ADR-007: triggered[].reason is now recruiter-facing, and work_history is
+// required on EVERY verdict (including "safe") — the Signals panel and the
+// title brand chip both key off this list.
 export const OVERLORD_SCHEMA_FRAGMENT_V2 = `"overlord": {
       "verdict": "safe" | "suspicious" | "inflated",
       "fraud_risk": number,
-      "triggered": [ { "id": string, "reason": "short phrase(<=12words)" } ]
+      "triggered": [ { "id": string, "reason": "recruiter-language phrase(<=12 words, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" } ],
+      "work_history": [
+        {
+          "employer": string,
+          "title": string,
+          "start": "YYYY-MM",
+          "end": "YYYY-MM" | "present",
+          "scope_one_liner": "short phrase(<=15 words, what they actually shipped)",
+          "brand_bucket": "FAANG" | "YC" | "tier-1" | null
+        }
+      ]
     }`;
 
 // Scoring-v2 profile fragment. Keeps the SAME `operating_profile` wrapper so the
@@ -52,6 +65,10 @@ export const OVERLORD_SCHEMA_FRAGMENT_V2 = `"overlord": {
 // collapses them into a code-assembled decision line. role_fit is byte-identical
 // to v1 (LOAD-BEARING: match route + rolefit-cache key off its one_liner) and
 // risk_flags is preserved.
+// ADR-007: three new recruiter-facing fields (title, edge, flag) emitted by the
+// execution-context section. They go alongside role_fit (NOT inside it) so the
+// existing role_fit parse path and the match-route's role_fit.one_liner key are
+// completely untouched.
 export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
         "role_fit": {
           "title": string,
@@ -61,7 +78,11 @@ export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
           "one_liner": string
         },
 
-        "risk_flags": string[]
+        "risk_flags": string[],
+
+        "title": "recruiter-facing headline(<=60 chars, follows the locked title pattern, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)",
+        "edge": "one sharp sentence about the strongest evidence(<=25 words, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)",
+        "flag": "null OR recruiter-language phrase about a REAL fraud-shaped risk(<=20 words, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block). null on clean candidates."
     }`;
 
 // Schema builders take the profile/overlord fragments as parameters so the v2
@@ -70,8 +91,8 @@ export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
 function juniorBehavioralSchema(profileFrag: string, overlordFrag: string): string {
   return `
   {
-    "pdq_breakdown": { "B1": number, "B2": number, "B3": number, "PDQ": number, "justification": "short phrase(5-15words)" },
-    "nr_breakdown": { "C1": number, "C2": number, "NR": number, "justification": "short phrase(5-15words)" },
+    "pdq_breakdown": { "B1": number, "B2": number, "B3": number, "PDQ": number, "justification": "recruiter-language phrase(<=25 words, cite specific evidence, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" },
+    "nr_breakdown": { "C1": number, "C2": number, "NR": number, "justification": "recruiter-language phrase(<=25 words, cite specific evidence, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" },
     ${profileFrag},
     ${overlordFrag},
     "yoe": number
@@ -82,9 +103,9 @@ function juniorBehavioralSchema(profileFrag: string, overlordFrag: string): stri
 function seniorSchema(profileFrag: string, overlordFrag: string): string {
   return `
   {
-    "om_breakdown": { "A1": number, "A2": number, "A3": number, "OM": number, "justification": "short phrase(5-15words)" },
-    "od_breakdown": { "B1": number, "B2": number, "B3": number, "OD": number, "justification": "short phrase(5-15words)" },
-    "pc_breakdown": { "C1": number, "C2": number, "C3": number, "PC": number, "justification": "short phrase(5-15words)" },
+    "om_breakdown": { "A1": number, "A2": number, "A3": number, "OM": number, "justification": "recruiter-language phrase(<=25 words, cite specific evidence, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" },
+    "od_breakdown": { "B1": number, "B2": number, "B3": number, "OD": number, "justification": "recruiter-language phrase(<=25 words, cite specific evidence, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" },
+    "pc_breakdown": { "C1": number, "C2": number, "C3": number, "PC": number, "justification": "recruiter-language phrase(<=25 words, cite specific evidence, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)" },
     ${profileFrag},
     ${overlordFrag},
     "yoe": number

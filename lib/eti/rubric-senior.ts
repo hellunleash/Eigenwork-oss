@@ -77,6 +77,13 @@ C3 Career Trajectory Structure (0-5)
 export const ALL_BLOCKS_EXP_V2 = `
 ${ROLE_ANCHORS}
 
+JUSTIFICATION VOICE (applies to om_breakdown.justification, od_breakdown.justification, pc_breakdown.justification):
+- <=25 words each.
+- Recruiter language only. NEVER use the rubric labels ESQ, PDQ, NR, OM, OD, PC,
+  or the words "rubric", "block", "justification" — these have no meaning to
+  recruiters and the downstream card path falls back when they appear.
+- Cite specific evidence (project verbs, named systems/tools, employer + role).
+
 BLOCK 1 — EXP Evidence (om_breakdown: A1-A3)
 You are evaluating operational maturity for an Experienced candidate (>=2 YOE).
 Use ONLY resume + selfDescription.

@@ -13,13 +13,42 @@ type RoleFit = {
   tertiary?: string[];
 };
 
-// v2 scoring (opt-in behind ETI_RUBRIC_VERSION=v2). Pre-v2 docs will NOT have
-// this field, so it is optional and the UI must fall back to role_fit.one_liner.
-type DecisionLine = {
-  base: string;
+// ADR-007: result card payload. Emitted by the v2 evaluation pipeline; absent
+// on legacy docs until the migration script (scripts/migrate-legacy-cards.mjs)
+// runs over them.
+export type Card = {
+  title: string;
   edge: string;
-  caveat: string;
-  text: string;
+  flag: string | null;
+};
+
+// ADR-007: structured work_history entry. One per role parsed by the overlord
+// step. brand_bucket drives the title's brand chip and is also written into
+// brand_cache for analytics. Empty array is a valid value (no employment).
+export type WorkHistoryEntry = {
+  employer: string;
+  title?: string;
+  start?: string;
+  end?: string;
+  scope_one_liner?: string;
+  brand_bucket?: 'FAANG' | 'YC' | 'tier-1' | null;
+};
+
+// Structural mirror of the fields the Signals panel renders from
+// GithubSignalMetrics. Junior-only; senior docs never carry it.
+export type GithubMetricsView = {
+  total_files?: number;
+  code_files?: number;
+  dir_depth_max?: number;
+  hardening_density?: number;
+  commits_analyzed?: number;
+  span_days?: number;
+  authorship_share?: number;
+  has_ci?: boolean;
+  has_dockerfile?: boolean;
+  has_routes?: boolean;
+  has_migrations?: boolean;
+  all_in_one_day?: boolean;
 };
 
 export type Candidate = {
@@ -28,7 +57,6 @@ export type Candidate = {
   yoe?: number;
   profile?: {
     role_fit?: RoleFit | string;
-    decision_line?: DecisionLine;
   };
   role_fit?: RoleFit | string;
   // Evidence status from v2 scoring; may be absent on older docs.
@@ -42,6 +70,12 @@ export type Candidate = {
     work_auth: string;
   };
   resume_url?: string;
+  // ADR-007 fields. card is present on new v2 evaluations and on legacy
+  // docs that have been through the migration script; github_metrics is
+  // junior-only; work_history is present on both tracks.
+  card?: Card;
+  github_metrics?: GithubMetricsView;
+  work_history?: WorkHistoryEntry[];
 };
 
 type MatchResultsResponse = {

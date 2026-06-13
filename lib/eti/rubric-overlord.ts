@@ -107,7 +107,49 @@ Overlord Output (STRUCTURED — replaces the v1 bare string):
 "overlord": {
   "verdict": "safe" | "suspicious" | "inflated",
   "fraud_risk": number between 0 and 1,
-  "triggered": [ { "id": "Rule_A1_FabricatedTimeline", "reason": "short phrase" } ]
+  "triggered": [ { "id": "Rule_A1_FabricatedTimeline", "reason": "recruiter-language phrase" } ],
+  "work_history": [
+    {
+      "employer": "Acme Corp",
+      "title": "Backend Engineer",
+      "start": "YYYY-MM",
+      "end": "YYYY-MM" | "present",
+      "scope_one_liner": "what they actually shipped (<=15 words)",
+      "brand_bucket": "FAANG" | "YC" | "tier-1" | null
+    }
+  ]
 }
-Keep "triggered" to only the rules that actually fired. Keep each "reason" a short phrase (<=12 words). If nothing fires, return verdict "safe", fraud_risk 0, and an empty "triggered" array.
+
+triggered[].reason rules:
+- Plain recruiter language. NEVER use the words "ESQ", "PDQ", "NR", "OM",
+  "OD", "PC", "rubric", "block", or "justification". The reason text
+  surfaces directly on the recruiter card; rubric jargon is a leak.
+- Keep each reason <=12 words and cite the actual tell ("Claims 4 yrs
+  but timeline only shows 8 months of work", "Every bullet ends in a
+  rounded percentage with no methodology").
+- triggered[] is empty when nothing fires (verdict "safe", fraud_risk 0).
+
+work_history extraction (REQUIRED on every verdict, including "safe"):
+- Emit one entry per role mentioned in the resume's experience section.
+- start / end use "YYYY-MM"; use "present" for the current role's end.
+- If a date is missing or unparseable, omit that field rather than guess.
+- scope_one_liner: <=15 words describing what they shipped in that role.
+  Recruiter-language; no rubric jargon. Cite a system, project, or
+  outcome ("Owned billing service across three regions", "Built the
+  iOS notification stack"). Do NOT regurgitate job-description prose.
+- brand_bucket classification: emit one of FAANG / YC / tier-1 / null.
+  • FAANG = Google, Meta, Amazon, Apple, Netflix, and Microsoft when
+    referenced as a peer tier (Microsoft is also commonly tier-1; either
+    is acceptable when ambiguous, prefer FAANG when the candidate's
+    role clearly maps to the FAANG cohort).
+  • YC = any Y Combinator-funded company. Use your knowledge of YC
+    batches; if a name is clearly a YC company you recognize, classify
+    it YC. If unsure, emit null — do NOT guess.
+  • tier-1 = Stripe, Anthropic, OpenAI, Datadog, Vercel, Snowflake,
+    Databricks, Nvidia, Tesla, and other widely-recognized top-tier
+    tech companies of comparable standing. When uncertain, emit null.
+  • null = everything below tier-1, including unknown / small / generic
+    names. Do NOT invent a bucket for an employer you do not recognize.
+- An empty work_history array ([]) is valid when the resume lists no
+  employment history (e.g., a 0-yoe student with only projects).
 `;

@@ -3,9 +3,10 @@ export const dynamic = 'force-dynamic';
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, useCallback } from "react";
 import { usePageTitle } from "@/lib/use-page-title";
-import { useResultsData, type Candidate } from "@/lib/use-results-data";
+import { useResultsData, type Candidate, type WorkHistoryEntry, type GithubMetricsView } from "@/lib/use-results-data";
 import { seniorityToCluster, detectWeakPool, type WeakPoolResult } from "@/lib/weak-pool";
 import { auth } from "@/lib/firebase";
+import { EtiInfoButton } from "@/app/components/home-interactive";
 import {
   ETI_AXIS_BAND_START,
   etiBandFlexWeights,
@@ -20,12 +21,132 @@ function getRoleFitOneLiner(c: Candidate): string {
   return "Not provided";
 }
 
-// v2 decision line (base + edge + caveat) when present; otherwise fall back to
-// the role-fit one-liner so pre-v2 docs (no decision_line) still render.
-function getDecisionText(c: Candidate): string {
-  const text = c.profile?.decision_line?.text;
-  if (typeof text === "string" && text.trim()) return text.trim();
-  return getRoleFitOneLiner(c);
+function getInitials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "—";
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// Trust band thresholds match production getTrustLabel below; the avatar pill
+// carries the same color family so the card's identity colour and trust
+// badge stay aligned.
+function avatarClassName(score: number): string {
+  if (score >= 80) return "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300";
+  if (score >= 65) return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+  return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+}
+
+function formatWorkRange(entry: WorkHistoryEntry): string {
+  const start = (entry.start ?? "").trim();
+  const end = (entry.end ?? "").trim();
+  if (!start && !end) return "";
+  return `${start || "—"}–${end || "—"}`;
+}
+
+function GitHubSignalsColumn({ m }: { m: GithubMetricsView }) {
+  const total = m.total_files;
+  const code = m.code_files;
+  const filesLine =
+    total != null && code != null
+      ? `${total} files · ${code} are code`
+      : total != null
+        ? `${total} files`
+        : null;
+  const hardening =
+    typeof m.hardening_density === "number" ? `hardening ${m.hardening_density} hits / 100 LOC` : null;
+  const commits =
+    m.commits_analyzed != null
+      ? m.span_days != null
+        ? `${m.commits_analyzed} commits over ${m.span_days} days`
+        : `${m.commits_analyzed} commits`
+      : null;
+  const authorship =
+    typeof m.authorship_share === "number" ? `${Math.round(m.authorship_share * 100)}% solo author` : null;
+  const infra = (() => {
+    const parts: string[] = [];
+    if (m.has_ci === false) parts.push("no CI");
+    else if (m.has_ci) parts.push("CI present");
+    if (m.has_dockerfile === false) parts.push("no Docker");
+    else if (m.has_dockerfile) parts.push("Docker present");
+    return parts.length ? parts.join(" · ") : null;
+  })();
+  const items = [
+    filesLine,
+    m.dir_depth_max != null ? `directory depth ${m.dir_depth_max}` : null,
+    hardening,
+    commits,
+    authorship,
+    infra,
+  ].filter((s): s is string => !!s);
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <h4 className="text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+        GitHub
+      </h4>
+      <ul className="space-y-1 text-sm text-gray-700 dark:text-gray-300">
+        {items.map((line, i) => (
+          <li key={i}>{line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function WorkHistoryColumn({ entries }: { entries: WorkHistoryEntry[] | undefined }) {
+  if (!entries || entries.length === 0) {
+    return (
+      <div>
+        <h4 className="text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          Work history
+        </h4>
+        <p className="text-sm text-gray-400 dark:text-gray-500">No employment history listed.</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <h4 className="text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+        Work history
+      </h4>
+      <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+        {entries.map((entry, i) => {
+          const range = formatWorkRange(entry);
+          const parts = [range, entry.employer, entry.title].filter((s): s is string => !!s && s.trim().length > 0);
+          return (
+            <li key={i}>
+              <div className="text-gray-800 dark:text-gray-200">{parts.join(" · ")}</div>
+              {entry.scope_one_liner && (
+                <div className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{entry.scope_one_liner}</div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function SignalsPanel({ candidate }: { candidate: Candidate }) {
+  const metrics = candidate.github_metrics;
+  // Junior renders both columns when github_metrics is present; senior never
+  // has github_metrics, so it falls through to the single-column work-history
+  // layout. ADR-007 §5.
+  if (metrics) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-3 mt-3 border-t border-gray-100 dark:border-white/[0.05]">
+        <GitHubSignalsColumn m={metrics} />
+        <WorkHistoryColumn entries={candidate.work_history} />
+      </div>
+    );
+  }
+  return (
+    <div className="pt-3 mt-3 border-t border-gray-100 dark:border-white/[0.05]">
+      <WorkHistoryColumn entries={candidate.work_history} />
+    </div>
+  );
 }
 
 function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistribution }) {
@@ -283,6 +404,15 @@ function JDResultsContent() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const weakPool = detectWeakPool(etiDistribution, seniorityToCluster(seniority));
 
@@ -309,7 +439,7 @@ function JDResultsContent() {
   }, [jobId, isSubmitting, router]);
 
   const exportCsv = () => {
-    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Decision", "Role Fit"];
+    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Title", "Edge", "Flag", "Role Fit"];
     const rows = top10.map((c, i) => {
       const wt = c.matchData?.workTypes;
       const workTypes = Array.isArray(wt) ? wt.join("; ") : wt != null ? String(wt) : "";
@@ -323,7 +453,9 @@ function JDResultsContent() {
         (c.matchData?.locations ?? []).join("; "),
         workTypes,
         (c.matchData?.work_auth ?? "").trim(),
-        getDecisionText(c),
+        c.card?.title ?? "",
+        c.card?.edge ?? "",
+        c.card?.flag ?? "",
         getRoleFitOneLiner(c),
       ];
     });
@@ -427,54 +559,114 @@ function JDResultsContent() {
             No matching candidates passed the filters (role fit, ETI ≥ 50, and work authorization).
           </p>
         ) : (
-        <ul className="space-y-4">
+        <ul className="space-y-3">
           {top10.map((c) => {
             const trust = getTrustLabel(c.score);
-            const location = (c.matchData?.locations ?? []).join(", ") || "—";
+            const location = (c.matchData?.locations ?? []).join(", ");
             const workTypesRaw = c.matchData?.workTypes;
-            const workTypes = Array.isArray(workTypesRaw) ? workTypesRaw.join(", ") : (workTypesRaw ? String(workTypesRaw) : "—");
-            const workAuth = (c.matchData?.work_auth ?? "").trim() || "—";
-            const decisionText = getDecisionText(c);
+            const workTypes = Array.isArray(workTypesRaw) ? workTypesRaw.join(", ") : (workTypesRaw ? String(workTypesRaw) : "");
+            const workAuth = (c.matchData?.work_auth ?? "").trim();
             const evidenceUnavailable = c.esq_status === "unavailable";
             const name = (c.candidateName ?? "").trim();
             const email = (c.email ?? "").trim();
             const phone = c.phone != null ? String(c.phone).trim() : "";
-            const identityParts = [name || "—", email || "—", ...(phone ? [phone] : [])];
-            const identityLine = identityParts.join(" • ");
+            const contactLine = [email, phone].filter(Boolean).join(" · ");
+            const metaParts = [location, workTypes, workAuth].filter(Boolean);
+            const metaLine = metaParts.join(" · ");
+            const initials = getInitials(name || c.id);
+            // Title falls back to role_fit (or "Candidate") when the doc is
+            // legacy and the card field has not yet been populated by the
+            // migration script (ADR-007 Phase 6).
+            const rfObj = !c.card?.title
+              ? (typeof c.role_fit === "object" ? c.role_fit : typeof c.profile?.role_fit === "object" ? c.profile.role_fit : undefined)
+              : undefined;
+            const title = (c.card?.title ?? rfObj?.title ?? "Candidate").trim() || "Candidate";
+            const edge = (c.card?.edge ?? "").trim();
+            const flag = c.card?.flag?.trim() || null;
+            const isExpanded = expandedIds.has(c.id);
+            const hasSignals = !!c.github_metrics || (c.work_history && c.work_history.length > 0) || c.work_history?.length === 0;
             return (
               <li
                 key={c.id}
-                className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm dark:shadow-none overflow-hidden"
+                className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm dark:shadow-none"
               >
                 <div className="p-4">
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span className="text-lg font-bold text-gray-900 dark:text-gray-100">ETI {c.score}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${trust.className}`}>
-                      {trust.text}
-                    </span>
-                    {c.yoe != null && (
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
-                        {c.yoe} yr{c.yoe !== 1 ? "s" : ""} exp
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium ${avatarClassName(c.score)}`}>
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                          {name || "—"}
+                        </p>
+                        {contactLine && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                            {contactLine}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-base font-semibold text-gray-900 dark:text-gray-100">ETI {c.score}</span>
+                        <EtiInfoButton />
                       </span>
-                    )}
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${trust.className}`}>
+                        {trust.text}
+                      </span>
+                      {c.yoe != null && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                          {c.yoe} yr{c.yoe !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2 flex flex-row flex-wrap items-center gap-x-1 gap-y-0">
-                    {identityLine}
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
+                    {title}
                   </p>
-                  <div className="flex flex-wrap items-start gap-x-2 gap-y-1 mb-2">
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {decisionText}
+                  {edge && (
+                    <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed mb-2">
+                      {edge}
                     </p>
-                    {evidenceUnavailable && (
-                      <span className="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                        evidence unavailable
-                      </span>
+                  )}
+                  {flag && (
+                    <div className="flex items-start gap-2 px-3 py-2 mb-2 rounded-md bg-red-50 dark:bg-red-500/15 text-red-700 dark:text-red-300 text-sm">
+                      <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+                      </svg>
+                      <span>{flag}</span>
+                    </div>
+                  )}
+                  {evidenceUnavailable && !flag && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      Evidence unavailable — scored on resume signal only.
+                    </p>
+                  )}
+                  {metaLine && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                      {metaLine}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {hasSignals && (
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(c.id)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+                        aria-expanded={isExpanded}
+                      >
+                        <svg
+                          className={`w-3.5 h-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                        Signals
+                      </button>
                     )}
-                  </div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-                    {location} • {workTypes} • {workAuth}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={async () => {
@@ -503,11 +695,12 @@ function JDResultsContent() {
                           // last-resort fallback above.
                         }
                       }}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                      className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                     >
-                      Download Resume ⬇
+                      Download resume ⬇
                     </button>
                   </div>
+                  {isExpanded && hasSignals && <SignalsPanel candidate={c} />}
                 </div>
               </li>
             );
