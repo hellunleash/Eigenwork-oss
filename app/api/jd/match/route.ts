@@ -570,6 +570,12 @@ async function runMatch(
             phone: d?.phone ?? item.phone ?? null,
             yoe: d?.yoe ?? item.yoe,
             resume_url: resumeUrl,
+            // ADR-007 result card fields. Pulled from the full doc so the
+            // existing match cache (predating this ADR) gets the new fields
+            // on first cached-path read instead of waiting for a fresh match.
+            ...(d?.card != null && { card: d.card }),
+            ...(d?.github_metrics != null && { github_metrics: d.github_metrics }),
+            ...(d?.work_history != null && { work_history: d.work_history }),
           };
         } catch {
           return item;
@@ -665,6 +671,11 @@ async function runMatch(
           phone: (full.phone as string | null | undefined) ?? null,
           matchData: full.matchData ?? c.matchData,
           resume_url: resumeUrl,
+          // ADR-007 result card fields. Conditionally spread so missing
+          // fields don't pollute the JSON with explicit undefineds.
+          ...(full.card != null && { card: full.card }),
+          ...(full.github_metrics != null && { github_metrics: full.github_metrics }),
+          ...(full.work_history != null && { work_history: full.work_history }),
         };
       } catch (err) {
         log("warn", "match.top10_enrich_failed", { ...ctx, candidateId: c.id }, err);
