@@ -61,8 +61,15 @@ export default function ProcessingPage() {
 
         if (!response.ok) {
           const errBody = await response.json().catch(() => ({}));
-          const msg = errBody?.message || errBody?.error || "Evaluation failed";
-          throw new Error(typeof msg === "string" ? msg : "Evaluation failed");
+          // Only surface server-provided human strings (errBody.message). Raw
+          // error codes (errBody.error like "no_screens" / "rate_limited") are
+          // machine identifiers, not user-facing — fall back to a generic
+          // message rather than leaking them to candidates.
+          const friendly =
+            typeof errBody?.message === "string" && errBody.message.trim()
+              ? errBody.message
+              : "We couldn't process your application right now. Please try again in a moment.";
+          throw new Error(friendly);
         }
 
         const result = await response.json();

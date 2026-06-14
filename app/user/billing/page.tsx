@@ -11,6 +11,8 @@ import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import useSWR from "swr";
 import { usePageTitle } from "@/lib/use-page-title";
+import { WALLET_UNIT_PRICE, WALLET_MIN_QTY, WALLET_MAX_QTY } from "@/lib/wallet-config";
+import { BILLING_EMAIL } from "@/lib/contact";
 
 declare global {
   interface Window {
@@ -38,7 +40,8 @@ type Me = {
 };
 
 type Kind = "single_role" | "team" | "wallet_topup";
-const WALLET_UNIT_PRICE = 0.15;
+
+const usd = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 function planLabel(plan: Me["plan"]) {
   return plan === "team" ? "Team" : plan === "single_role" ? "Single Role" : "Free";
@@ -93,10 +96,17 @@ export default function BillingPage() {
     if (!orgId) return alert("Workspace isn't ready yet — refresh and try again.");
     const priceId = prices[kind];
     if (!priceId) return alert("This product isn't available yet. (Price not configured.)");
+    // Defensive clamp: the UI input also enforces bounds, but a stale render
+    // or programmatic state could leak an out-of-range value. The webhook
+    // re-validates as the final guard before crediting.
+    let qty = Math.max(1, Math.floor(quantity));
+    if (kind === "wallet_topup") {
+      qty = Math.min(WALLET_MAX_QTY, Math.max(WALLET_MIN_QTY, qty));
+    }
     setBusy(kind);
     try {
       window.Paddle.Checkout.open({
-        items: [{ priceId, quantity: Math.max(1, Math.floor(quantity)) }],
+        items: [{ priceId, quantity: qty }],
         customData: { orgId, kind },
       });
     } finally {
@@ -192,34 +202,54 @@ export default function BillingPage() {
         <div className="bg-white border border-gray-200 rounded-xl dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Screen Wallet</h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Pay-as-you-go overage at <span className="font-medium text-gray-900 dark:text-gray-200">${WALLET_UNIT_PRICE.toFixed(2)}/screen</span>. Used
-            automatically once your plan&apos;s screens run out — never expires.
+            Prepaid overage at <span className="font-medium text-gray-900 dark:text-gray-200">${WALLET_UNIT_PRICE.toFixed(2)}/screen</span>. Top up any
+            amount; drawn from once your plan&apos;s screens run out — never expires.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <label className="block">
               <span className="text-xs text-gray-500 dark:text-gray-400">Screens</span>
               <input
                 type="number"
-                min={1}
+                min={WALLET_MIN_QTY}
+                max={WALLET_MAX_QTY}
                 value={walletQty}
                 onChange={(e) => {
                   const v = parseInt(e.target.value, 10);
-                  setWalletQty(Number.isInteger(v) && v >= 1 ? v : 1);
+                  // While typing, only enforce the upper bound and reject
+                  // junk/negative values. The lower bound is checked at
+                  // submit time so the user can type freely (e.g. "1500"
+                  // without "1" snapping to the minimum mid-keystroke).
+                  if (!Number.isInteger(v) || v < 1) {
+                    setWalletQty(1);
+                    return;
+                  }
+                  setWalletQty(Math.min(WALLET_MAX_QTY, v));
                 }}
                 className="block w-36 mt-1 px-3 py-2 border border-gray-300 dark:border-white/[0.1] bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg"
               />
             </label>
             <button
               type="button"
-              disabled={busy === "wallet_topup"}
+              disabled={busy === "wallet_topup" || walletQty < WALLET_MIN_QTY}
               onClick={() => checkout("wallet_topup", walletQty)}
-              className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 disabled:opacity-50"
+              className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {busy === "wallet_topup"
                 ? "Opening…"
-                : `Buy ${walletQty.toLocaleString()} for $${(walletQty * WALLET_UNIT_PRICE).toFixed(2)}`}
+                : `Buy ${walletQty.toLocaleString()} for ${usd(walletQty * WALLET_UNIT_PRICE)}`}
             </button>
           </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+            Min {WALLET_MIN_QTY.toLocaleString()} · Max {WALLET_MAX_QTY.toLocaleString()} screens per top-up.
+            {" "}Need more?{" "}
+            <a
+              href={`mailto:${BILLING_EMAIL}`}
+              className="font-medium text-gray-700 dark:text-gray-300 underline hover:text-gray-900 dark:hover:text-gray-100"
+            >
+              Email us
+            </a>
+            .
+          </p>
         </div>
 
         <p className="text-xs text-gray-400 dark:text-gray-500 mt-6">

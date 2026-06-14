@@ -63,7 +63,6 @@ export type Candidate = {
   esq_status?: 'ok' | 'unavailable' | 'no_evidence';
   candidateName?: string;
   email?: string;
-  phone?: string | null;
   matchData: {
     locations: string[];
     workTypes: string[];

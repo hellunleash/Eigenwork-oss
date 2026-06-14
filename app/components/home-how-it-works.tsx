@@ -87,14 +87,13 @@ export function HomeHowItWorks() {
                 </div>
                 <ul className="divide-y divide-gray-100 dark:divide-white/[0.05]">
                   {[
-                    { score: 82, trust: "Very High Trust", trustClass: "bg-teal-100 dark:bg-teal-500/15 text-teal-700 dark:text-teal-300", name: "Marcus Webb", email: "mwebb.dev@outlook.example", roleFit: "Software Development Engineer (Java, Node.js | Express.js, MongoDB, Mongoose)", location: "Onsite", workType: "Full-time", workAuth: "—" },
-                    { score: 76, trust: "High Trust", trustClass: "bg-green-100 dark:bg-green-500/15 text-green-700 dark:text-green-300", name: "Ashi", email: "ashi@protonmail.example", roleFit: "Software Development Engineer (Java, Go | Spring Boot, PostgreSQL, Kafka)", location: "Onsite", workType: "Full-time", workAuth: "—" },
-                    { score: 74, trust: "High Trust", trustClass: "bg-green-100 dark:bg-green-500/15 text-green-700 dark:text-green-300", name: "James Okonkwo", email: "j.okonkwo.dev@gmail.example", roleFit: "Software Development Engineer (Java, Ruby | Rails, Sidekiq, PostgreSQL)", location: "Onsite", workType: "Full-time", workAuth: "—" },
+                    { score: 82, name: "Marcus Webb", email: "mwebb.dev@outlook.example", roleFit: "Software Development Engineer (Java, Node.js | Express.js, MongoDB, Mongoose)", location: "Onsite", workType: "Full-time", workAuth: "—" },
+                    { score: 76, name: "Ashi", email: "ashi@protonmail.example", roleFit: "Software Development Engineer (Java, Go | Spring Boot, PostgreSQL, Kafka)", location: "Onsite", workType: "Full-time", workAuth: "—" },
+                    { score: 74, name: "James Okonkwo", email: "j.okonkwo.dev@gmail.example", roleFit: "Software Development Engineer (Java, Ruby | Rails, Sidekiq, PostgreSQL)", location: "Onsite", workType: "Full-time", workAuth: "—" },
                   ].map((c, i) => (
                     <li key={i} className="px-4 py-4 hover:bg-gray-50/50 dark:hover:bg-white/[0.03] transition-colors">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-base font-bold text-gray-900 dark:text-gray-100">ETI {c.score}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.trustClass}`}>{c.trust}</span>
                       </div>
                       <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">{c.name} • {c.email}</p>
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{c.roleFit}</p>

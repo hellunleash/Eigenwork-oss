@@ -78,7 +78,7 @@ export function useDashboardData(userId: string | null) {
     }
   );
 
-  // Fetch user profile (eigenCredits)
+  // Fetch org-scoped entitlement summary (plan + screensRemaining + wallet).
   const {
     data: userData,
     error: userError,

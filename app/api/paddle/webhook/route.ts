@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { markPaddleTransactionProcessed, makeOpId } from "@/lib/credit-ledger";
 import { grantPass, creditWallet } from "@/lib/entitlements";
+import { WALLET_MIN_QTY, WALLET_MAX_QTY } from "@/lib/wallet-config";
 import { getRequestId, log } from "@/lib/server-logger";
 
 export const runtime = "nodejs";
@@ -107,6 +108,28 @@ export async function POST(req: Request) {
         }
         if (kind === "wallet_topup") {
           // Variable-quantity wallet top-up: quantity = number of screens.
+          // Defense-in-depth: the billing UI clamps to the same bounds
+          // (imported from lib/wallet-config), and checkout() re-clamps
+          // before opening Paddle. If a webhook arrives with a quantity
+          // outside this range it's either a Paddle bug or a hand-crafted
+          // bypass — refuse to credit and log loudly. The customer's
+          // already been charged by Paddle; surface via support for a
+          // manual refund or credit decision rather than auto-applying an
+          // unbounded balance.
+          if (quantity < WALLET_MIN_QTY || quantity > WALLET_MAX_QTY) {
+            log("error", "paddle.wallet_topup_quantity_out_of_range", {
+              requestId,
+              route,
+              orgId,
+              txnId,
+              quantity,
+              min: WALLET_MIN_QTY,
+              max: WALLET_MAX_QTY,
+            });
+            // Return 200 so Paddle does not retry; the txnId is already
+            // recorded in processedPaddleTransactions above.
+            return NextResponse.json({ success: true });
+          }
           await creditWallet({
             orgId,
             screens: quantity,

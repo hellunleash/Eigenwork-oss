@@ -28,7 +28,6 @@ function CandidatePageContent() {
   // Form state
   const [name, setName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
-  const [phone, setPhone] = useState<string>('');
   const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
   const [locations, setLocations] = useState<LocationType[]>([]);
   const [experience, setExperience] = useState<string>('');
@@ -63,13 +62,13 @@ function CandidatePageContent() {
         if (!res.ok) throw new Error(res.status === 404 ? 'Job not found' : 'Failed to load job');
         return res.json();
       })
-      .then((jd: { 
-        employment_type?: string; 
-        location_type?: string; 
-        isClosed?: boolean; 
-        submissionCap?: number; 
-        appliedCount?: number; 
-        eigenCredits?: number;
+      .then((jd: {
+        employment_type?: string;
+        location_type?: string;
+        isClosed?: boolean;
+        submissionCap?: number;
+        appliedCount?: number;
+        screensRemaining?: number;
         role_fit?: {
           title?: string;
           primary?: string[];
@@ -84,10 +83,10 @@ function CandidatePageContent() {
         const isClosed = Boolean(jd.isClosed);
         const cap = typeof jd.submissionCap === 'number' ? jd.submissionCap : 10;
         const applied = typeof jd.appliedCount === 'number' ? jd.appliedCount : 0;
-        const eigenCredits = typeof jd.eigenCredits === 'number' ? jd.eigenCredits : 0;
+        const screensRemaining = typeof jd.screensRemaining === 'number' ? jd.screensRemaining : 0;
 
-        // Check if link is paused due to no eigenCredits
-        if (eigenCredits === 0) {
+        // Pause when the owning org has no screens left (pass + wallet both empty).
+        if (screensRemaining === 0) {
           setLinkPaused(true);
         }
         // Check if link is expired (closed or cap reached)
@@ -288,7 +287,6 @@ function CandidatePageContent() {
       const formData = {
         name: name.trim(),
         email: email.trim(),
-        phone: phone.trim() || undefined,
         workTypes,
         locations,
         experience,
@@ -425,18 +423,6 @@ function CandidatePageContent() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full max-w-md px-3 py-2 text-sm text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-white/[0.1] rounded-md focus:outline-none focus:ring-2 focus:ring-gray-200 dark:focus:ring-white/20 bg-white dark:bg-white/[0.02] placeholder:text-gray-400 dark:placeholder:text-gray-500"
-              />
-            </div>
-            <div className="mb-4">
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-3">
-                Phone <span className="text-gray-400">(optional)</span>
-              </label>
-              <input
-                type="text"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="Phone number"
                 className="w-full max-w-md px-3 py-2 text-sm text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-white/[0.1] rounded-md focus:outline-none focus:ring-2 focus:ring-gray-200 dark:focus:ring-white/20 bg-white dark:bg-white/[0.02] placeholder:text-gray-400 dark:placeholder:text-gray-500"
               />
             </div>

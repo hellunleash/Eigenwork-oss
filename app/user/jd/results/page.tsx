@@ -4,7 +4,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, useCallback } from "react";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useResultsData, type Candidate, type WorkHistoryEntry, type GithubMetricsView } from "@/lib/use-results-data";
-import { seniorityToCluster, detectWeakPool, type WeakPoolResult } from "@/lib/weak-pool";
 import { auth } from "@/lib/firebase";
 import { EtiInfoButton } from "@/app/components/home-interactive";
 import {
@@ -29,9 +28,6 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-// Trust band thresholds match production getTrustLabel below; the avatar pill
-// carries the same color family so the card's identity colour and trust
-// badge stay aligned.
 function avatarClassName(score: number): string {
   if (score >= 80) return "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300";
   if (score >= 65) return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
@@ -269,13 +265,6 @@ function EtiPoolDistributionBar({ distribution }: { distribution: EtiDistributio
   );
 }
 
-function getTrustLabel(score: number): { text: string; className: string } {
-  if (score >= 80) return { text: "Very High Trust", className: "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" };
-  if (score >= 65) return { text: "High Trust", className: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" };
-  if (score >= 50) return { text: "Medium Trust", className: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" };
-  return { text: "Low Trust", className: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" };
-}
-
 function ResultsNavBar() {
   const router = useRouter();
   return (
@@ -297,97 +286,6 @@ function ResultsNavBar() {
   );
 }
 
-function WeakPoolBanner({
-  weakPool,
-  onStartNewIntake,
-  onDismiss,
-}: {
-  weakPool: WeakPoolResult & { weak: true };
-  onStartNewIntake: () => void;
-  onDismiss: () => void;
-}) {
-  const isJunior = weakPool.cluster === "junior";
-  const body = isJunior
-    ? `${weakPool.pctBelowThreshold}% of applicants did not meet the baseline ETI (50). This usually indicates low-quality sourcing.`
-    : `${weakPool.pctBelowThreshold}% of applicants are below the contributor threshold (ETI 65). The pool lacks strong-fit candidates.`;
-
-  return (
-    <div className="mb-6 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-4 relative">
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="absolute top-3 right-3 text-amber-400 dark:text-amber-500 hover:text-amber-600 dark:hover:text-amber-300 transition-colors"
-        aria-label="Dismiss"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-      <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">Weak Candidate Pool</h3>
-      <p className="text-sm text-amber-800 dark:text-amber-300 mb-4 pr-6">{body}</p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onStartNewIntake}
-          className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
-        >
-          Start New Intake
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="px-4 py-2 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-        >
-          Keep This Pool
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function NewIntakeModal({
-  onCancel,
-  onConfirm,
-  isSubmitting,
-}: {
-  onCancel: () => void;
-  onConfirm: () => void;
-  isSubmitting: boolean;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative bg-white dark:bg-white/[0.02] rounded-xl shadow-xl dark:shadow-none w-full max-w-md mx-4 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Start New Intake</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-          You can start collecting a new set of applicants.
-        </p>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mb-6">
-          No additional cost. Credits used for this pool will be restored.
-        </p>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isSubmitting}
-            className="px-4 py-2 border border-gray-200 dark:border-white/[0.1] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isSubmitting}
-            className="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50"
-          >
-            {isSubmitting ? "Starting…" : "Confirm"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function csvCell(value: unknown): string {
   const s = value == null ? "" : String(value);
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -395,15 +293,11 @@ function csvCell(value: unknown): string {
 
 function JDResultsContent() {
   usePageTitle("Top Candidates");
-  const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
   
-  const { top10, etiDistribution, seniority, isLoading, error, revalidate } = useResultsData(jobId);
+  const { top10, etiDistribution, isLoading, error, revalidate } = useResultsData(jobId);
 
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -414,32 +308,8 @@ function JDResultsContent() {
     });
   }, []);
 
-  const weakPool = detectWeakPool(etiDistribution, seniorityToCluster(seniority));
-
-  const handleConfirmNewIntake = useCallback(async () => {
-    if (!jobId || isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      const res = await fetch("/api/jd/new-intake", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ jobId }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      setShowModal(false);
-      setBannerDismissed(true);
-      router.push("/user/dashboard");
-    } catch {
-      setIsSubmitting(false);
-    }
-  }, [jobId, isSubmitting, router]);
-
   const exportCsv = () => {
-    const headers = ["Rank", "Name", "Email", "Phone", "ETI Score", "Trust", "Location", "Work Types", "Work Auth", "Title", "Edge", "Flag", "Role Fit"];
+    const headers = ["Rank", "Name", "Email", "ETI Score", "Location", "Work Types", "Work Auth", "Title", "Edge", "Flag", "Role Fit"];
     const rows = top10.map((c, i) => {
       const wt = c.matchData?.workTypes;
       const workTypes = Array.isArray(wt) ? wt.join("; ") : wt != null ? String(wt) : "";
@@ -447,9 +317,7 @@ function JDResultsContent() {
         String(i + 1),
         c.candidateName ?? "",
         c.email ?? "",
-        c.phone != null ? String(c.phone) : "",
         String(c.score ?? ""),
-        getTrustLabel(c.score).text,
         (c.matchData?.locations ?? []).join("; "),
         workTypes,
         (c.matchData?.work_auth ?? "").trim(),
@@ -540,20 +408,6 @@ function JDResultsContent() {
           )}
         </div>
         <EtiPoolDistributionBar distribution={etiDistribution} />
-        {weakPool.weak && !bannerDismissed && (
-          <WeakPoolBanner
-            weakPool={weakPool}
-            onStartNewIntake={() => setShowModal(true)}
-            onDismiss={() => setBannerDismissed(true)}
-          />
-        )}
-        {showModal && (
-          <NewIntakeModal
-            onCancel={() => setShowModal(false)}
-            onConfirm={handleConfirmNewIntake}
-            isSubmitting={isSubmitting}
-          />
-        )}
         {top10.length === 0 ? (
           <p className="text-gray-600 dark:text-gray-400 text-sm text-center py-4">
             No matching candidates passed the filters (role fit, ETI ≥ 50, and work authorization).
@@ -561,7 +415,6 @@ function JDResultsContent() {
         ) : (
         <ul className="space-y-3">
           {top10.map((c) => {
-            const trust = getTrustLabel(c.score);
             const location = (c.matchData?.locations ?? []).join(", ");
             const workTypesRaw = c.matchData?.workTypes;
             const workTypes = Array.isArray(workTypesRaw) ? workTypesRaw.join(", ") : (workTypesRaw ? String(workTypesRaw) : "");
@@ -569,8 +422,6 @@ function JDResultsContent() {
             const evidenceUnavailable = c.esq_status === "unavailable";
             const name = (c.candidateName ?? "").trim();
             const email = (c.email ?? "").trim();
-            const phone = c.phone != null ? String(c.phone).trim() : "";
-            const contactLine = [email, phone].filter(Boolean).join(" · ");
             const metaParts = [location, workTypes, workAuth].filter(Boolean);
             const metaLine = metaParts.join(" · ");
             const initials = getInitials(name || c.id);
@@ -600,9 +451,9 @@ function JDResultsContent() {
                         <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                           {name || "—"}
                         </p>
-                        {contactLine && (
+                        {email && (
                           <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                            {contactLine}
+                            {email}
                           </p>
                         )}
                       </div>
@@ -611,9 +462,6 @@ function JDResultsContent() {
                       <span className="inline-flex items-center gap-1">
                         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">ETI {c.score}</span>
                         <EtiInfoButton />
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${trust.className}`}>
-                        {trust.text}
                       </span>
                       {c.yoe != null && (
                         <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">

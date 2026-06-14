@@ -744,7 +744,6 @@ type CandidateDoc = {
   };
   candidateName?: string;
   email?: string;
-  phone?: string | null;
   resumePath?: string;
   experienceLevel?: string;
   breakdown?: unknown;
@@ -772,7 +771,7 @@ async function runMatch(
       poolSnap.docs.map((d) => Number((d.data() as CandidateDoc).score) || 0)
     );
     const enriched = await Promise.all(
-      (cached.top10 as { id: string; candidateName?: string; email?: string; phone?: string | null; yoe?: number }[]).map(async (item) => {
+      (cached.top10 as { id: string; candidateName?: string; email?: string; yoe?: number }[]).map(async (item) => {
         try {
           const candSnap = await db.collection("candidates").doc(item.id).get();
           if (!candSnap.exists) return item;
@@ -783,7 +782,6 @@ async function runMatch(
             ...item,
             candidateName: d?.candidateName ?? item.candidateName ?? "",
             email: d?.email ?? item.email ?? "",
-            phone: d?.phone ?? item.phone ?? null,
             yoe: d?.yoe ?? item.yoe,
             resume_url: resumeUrl,
             // ADR-007 result card fields. Pulled from the full doc so the
@@ -841,8 +839,8 @@ async function runMatch(
   const top = list.slice(0, TOP_MATCH_COUNT);
 
   // Re-fetch FULL docs for the top 10 only. The minimal scan above didn't
-  // include candidateName, email, phone, full profile (ramp/supervision/
-  // risk_flags), full matchData (workTypes/locations), or resumePath.
+  // include candidateName, email, full profile (ramp/supervision/risk_flags),
+  // full matchData (workTypes/locations), or resumePath.
   // Single batched fetch, bounded at ~200ms.
   const top10 = await Promise.all(
     top.map(async (c) => {
@@ -858,7 +856,6 @@ async function runMatch(
             role_fit: c.profile?.role_fit,
             candidateName: "",
             email: "",
-            phone: null,
             matchData: c.matchData,
             resume_url: null,
           };
@@ -875,7 +872,6 @@ async function runMatch(
           role_fit: profileObj?.role_fit ?? c.profile?.role_fit,
           candidateName: typeof full.candidateName === "string" ? full.candidateName : "",
           email: typeof full.email === "string" ? full.email : "",
-          phone: (full.phone as string | null | undefined) ?? null,
           matchData: full.matchData ?? c.matchData,
           resume_url: resumeUrl,
           // ADR-007 result card fields. Conditionally spread so missing
@@ -892,10 +888,9 @@ async function runMatch(
           yoe: c.yoe,
           profile: c.profile,
           role_fit: c.profile?.role_fit,
+          matchData: c.matchData,
           candidateName: "",
           email: "",
-          phone: null,
-          matchData: c.matchData,
           resume_url: null,
         };
       }

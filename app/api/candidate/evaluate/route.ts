@@ -59,7 +59,6 @@ export async function POST(req: NextRequest) {
     const {
       name,
       email,
-      phone,
       workTypes,
       locations,
       authRegions,
@@ -290,7 +289,14 @@ export async function POST(req: NextRequest) {
     if (ownerOrgId) {
       const decision = await canEvaluate(ownerOrgId);
       if (!decision.allowed) {
-        return NextResponse.json({ error: "no_screens" }, { status: 402 });
+        return NextResponse.json(
+          {
+            error: "no_screens",
+            message:
+              "This role isn't accepting applications right now. The employer's been notified — please check back soon.",
+          },
+          { status: 402 }
+        );
       }
     }
 
@@ -301,7 +307,6 @@ export async function POST(req: NextRequest) {
     const docRef = await db.collection("candidates").add({
       candidateName: name ?? "",
       email: email ?? "",
-      phone: phone || null,
       matchData: {
         jobId: jobId ?? null,
         workTypes,

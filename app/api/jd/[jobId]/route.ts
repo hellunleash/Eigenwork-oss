@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminDb, adminStorageDelete } from "@/lib/firebase-admin";
-import { getUserProfile } from "@/lib/user-credits";
+import { getEntitlementSummary } from "@/lib/entitlements";
 import { requireOrgMember } from "@/lib/org";
 import { getRequestId, log } from "@/lib/server-logger";
 
@@ -10,7 +10,8 @@ type RouteContext = { params: Promise<{ jobId: string }> };
  * GET /api/jd/[jobId] — PUBLIC.
  *
  * Used by the candidate intake page to autofill the job title/stack/location
- * fields and to gate submission when isClosed or eigenCredits is 0.
+ * fields and to gate submission when isClosed or the owning org has no
+ * screens left (screensRemaining === 0 pauses the intake link).
  *
  * IMPORTANT: this endpoint is reachable by anyone who has the intake link
  * (which is shared publicly on X/LinkedIn/email blasts). Responses MUST be
@@ -48,14 +49,18 @@ export async function GET(_req: Request, context: RouteContext) {
       .get();
     const appliedCount = candSnap.size;
 
-    let eigenCredits = 0;
-    const ownerUserId = typeof data.userId === "string" ? data.userId : null;
-    if (ownerUserId) {
+    // Read the canonical org-scoped screen balance (ADR-002): pass bucket
+    // remaining + wallet. This is the same source the dashboard banner and the
+    // canEvaluate gate use, so the intake-page pause and the actual server gate
+    // stay in agreement.
+    let screensRemaining = 0;
+    const ownerOrgId = typeof data.orgId === "string" ? data.orgId : null;
+    if (ownerOrgId) {
       try {
-        const profile = await getUserProfile(ownerUserId);
-        eigenCredits = profile.eigenCredits;
+        const summary = await getEntitlementSummary(ownerOrgId);
+        screensRemaining = summary.screensRemaining;
       } catch {
-        eigenCredits = 0;
+        screensRemaining = 0;
       }
     }
 
@@ -81,7 +86,7 @@ export async function GET(_req: Request, context: RouteContext) {
       isClosed,
       submissionCap,
       appliedCount,
-      eigenCredits,
+      screensRemaining,
     };
 
     return NextResponse.json(publicView);

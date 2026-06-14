@@ -1,16 +1,19 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { WALLET_UNIT_PRICE } from "@/lib/wallet-config";
+import { BILLING_EMAIL } from "@/lib/contact";
+
+const WALLET_PRICE_DISPLAY = `$${WALLET_UNIT_PRICE.toFixed(2)}`;
 
 export const metadata: Metadata = {
   title: "Pricing — EigenWork",
   description:
-    "EigenWork pricing: a free tier, one-time Single Role and Team plans, and pay-as-you-go overage. Priced per role and per candidate screen — the way hiring teams actually budget.",
+    "EigenWork pricing: a free tier, one-time Single Role and Team plans, and a prepaid Screen Wallet for overage. Priced per role and per candidate screen — the way hiring teams actually budget.",
   alternates: { canonical: "/pricing" },
   robots: { index: true, follow: true, googleBot: { index: true, follow: true } },
   openGraph: {
     title: "EigenWork Pricing",
-    description:
-      "A free tier, one-time Single Role ($149) and Team ($699) plans, plus $0.15/screen overage. Priced per role, not per seat.",
+    description: `A free tier, one-time Single Role ($149) and Team ($699) plans, plus ${WALLET_PRICE_DISPLAY}/screen overage. Priced per role, not per seat.`,
     url: "/pricing",
     siteName: "EigenWork",
     type: "website",
@@ -18,7 +21,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "EigenWork Pricing",
-    description: "Free tier, one-time Single Role & Team plans, $0.15/screen overage.",
+    description: `Free tier, one-time Single Role & Team plans, ${WALLET_PRICE_DISPLAY}/screen overage.`,
   },
 };
 
@@ -78,7 +81,7 @@ const TIERS: Tier[] = [
     cadence: "annual",
     tagline: "Scale hiring with controls.",
     features: ["Unlimited roles", "Custom screen volume", "SSO / SAML", "Audit logs + SLA", "Dedicated support"],
-    cta: { label: "Contact us", href: "mailto:eigenwork.team@gmail.com" },
+    cta: { label: "Contact us", href: `mailto:${BILLING_EMAIL}` },
   },
 ];
 
@@ -162,10 +165,10 @@ export default function PricingPage() {
         {/* Overage + unit explainer */}
         <div className="mt-12 grid md:grid-cols-2 gap-5">
           <div className="bg-white border border-gray-200 rounded-xl p-6 dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Screen Wallet — pay-as-you-go overage</h3>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Screen Wallet — prepaid overage</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Go past your plan&apos;s screens and they draw from a prepaid Screen Wallet at{" "}
-              <span className="font-medium text-gray-900 dark:text-gray-200">$0.15 per screen</span>. Top up any amount; it never expires
+              <span className="font-medium text-gray-900 dark:text-gray-200">{WALLET_PRICE_DISPLAY} per screen</span>. Top up any amount; it never expires
               and is only used after your plan&apos;s screens run out.
             </p>
           </div>
@@ -180,8 +183,8 @@ export default function PricingPage() {
 
         <p className="text-center text-sm text-gray-500 dark:text-gray-500 mt-10">
           Questions about pricing or volume?{" "}
-          <a href="mailto:eigenwork.team@gmail.com" className="font-medium text-gray-900 dark:text-gray-200 underline hover:text-gray-700 dark:hover:text-gray-100">
-            eigenwork.team@gmail.com
+          <a href={`mailto:${BILLING_EMAIL}`} className="font-medium text-gray-900 dark:text-gray-200 underline hover:text-gray-700 dark:hover:text-gray-100">
+            {BILLING_EMAIL}
           </a>
         </p>
       </div>

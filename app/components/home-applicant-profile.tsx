@@ -21,9 +21,6 @@ export function HomeApplicantProfile() {
               <div className="flex items-center gap-3">
                 <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Sarah Chen</h3>
                 <EtiPopover />
-                <span className="px-2.5 py-0.5 bg-green-100 dark:bg-green-500/15 text-green-700 dark:text-green-300 text-xs font-medium rounded-full">
-                  High Trust
-                </span>
               </div>
             </div>
             <div className="px-5 py-4 space-y-4">
