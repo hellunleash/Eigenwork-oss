@@ -59,10 +59,6 @@ Role Fit
 - Do NOT include the words "primary", "secondary", "tertiary" in the one_liner.
 - Do NOT hallucinate tools not present in the resume.
 
-Risk Flags
-- Only flag explicit contradictions, impossible timelines, fabricated claims, or mutually inconsistent facts.
-Do NOT flag vague wording, missing metrics, broad tool lists, or lack of detailed process explanation.
-
 Title (recruiter card headline, <=60 chars)
 Pick ONE of the three patterns below in priority order:
 1. Brand chip:   "<X> yrs at <bucket> · <role>"   when work_history has at
