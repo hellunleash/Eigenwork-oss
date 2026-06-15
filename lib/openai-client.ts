@@ -31,23 +31,69 @@ function release(): void {
   else active--; // no one waiting: free the slot
 }
 
-export async function runJsonModel(prompt: string, maxOutputTokens = 10000) {
+// Flex processing (service_tier:"flex") bills at Batch API rates (~50% off input
+// AND output) and STACKS with prompt caching. A capacity shortfall comes back as a
+// 429 and is NOT billed, so flex retries are free. Flex can be slower to schedule,
+// so OpenAI recommends a 15-min client timeout; standard stays tight. We disable
+// the SDK's own auto-retry (maxRetries:0) so safeGenerate is the single, observable
+// retry authority — no hidden extra calls, no surprise billing.
+export type ServiceTier = "flex" | "default";
+const FLEX_TIMEOUT_MS = 15 * 60 * 1000;
+const STD_TIMEOUT_MS = 4 * 60 * 1000;
+
+export type ModelResult = {
+  text: string;
+  // The tier OpenAI reports it actually BILLED — so the cheap path is auditable,
+  // never blind. null if the response doesn't surface it.
+  serviceTier: string | null;
+  inputTokens?: number;
+  cachedTokens?: number;
+  outputTokens?: number;
+};
+
+export async function runJsonModel(
+  prompt: string,
+  maxOutputTokens = 10000,
+  serviceTier: ServiceTier = "default"
+): Promise<ModelResult> {
   await acquire();
   try {
-    const res = await openai.responses.create({
-      model: "gpt-5.2",
-      temperature: 0,
-      max_output_tokens: maxOutputTokens,
-      text: { format: { type: "json_object" } },
-      input: prompt
-    });
+    const res = await openai.responses.create(
+      {
+        model: "gpt-5.4",
+        temperature: 0,
+        max_output_tokens: maxOutputTokens,
+        text: { format: { type: "json_object" } },
+        input: prompt,
+        service_tier: serviceTier,
+      },
+      {
+        timeout: serviceTier === "flex" ? FLEX_TIMEOUT_MS : STD_TIMEOUT_MS,
+        maxRetries: 0,
+      }
+    );
 
     const text = res.output_text;
     if (text == null || text === "") {
       const err = (res as { error?: { message?: string } }).error;
       throw new Error(err?.message ?? "Model returned no output");
     }
-    return text;
+
+    const meta = res as {
+      service_tier?: string | null;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        input_tokens_details?: { cached_tokens?: number };
+      };
+    };
+    return {
+      text,
+      serviceTier: meta.service_tier ?? null,
+      inputTokens: meta.usage?.input_tokens,
+      cachedTokens: meta.usage?.input_tokens_details?.cached_tokens,
+      outputTokens: meta.usage?.output_tokens,
+    };
   } finally {
     release();
   }

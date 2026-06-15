@@ -129,6 +129,17 @@ export function enforceSeniorOverlord(): boolean {
   return v === "1" || v === "true" || v === "TRUE";
 }
 
+// Junior Overlord also ships in SHADOW MODE: the verdict is computed and
+// persisted (overlord_verdict) and still drives the result-card flag, but the
+// numeric score cap is applied only when ETI_OVERLORD_ENFORCE_JUNIOR is truthy.
+// Default off = the junior score is never reduced — suspected fraud surfaces via
+// the flag, not by silently dropping the candidate below the match gate. Read
+// per-call so the cap can be re-enabled without a redeploy.
+export function enforceJuniorOverlord(): boolean {
+  const v = process.env.ETI_OVERLORD_ENFORCE_JUNIOR;
+  return v === "1" || v === "true" || v === "TRUE";
+}
+
 function safeYoe(value: unknown): number | undefined {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 99.9) return undefined;
@@ -152,6 +163,19 @@ function extractJSON(text: string, ctx: LogContext) {
 const MAX_LLM_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
+
+// Service tier for scoring calls. "flex" (default) bills at ~Batch rates (~50% off
+// input AND output) and stacks with prompt caching; a flex capacity shortfall is a
+// FREE 429, so flex retries cost nothing. "default" is the A/B + fallback lane.
+// Flip the whole live path with OPENAI_SERVICE_TIER=default (no redeploy).
+function configuredServiceTier(): "flex" | "default" {
+  return process.env.OPENAI_SERVICE_TIER === "default" ? "default" : "flex";
+}
+// Spend the first FLEX_ATTEMPTS on flex, then fall back to billable standard for the
+// remaining attempts. That fallback is what guarantees a candidate is never stranded
+// by a flex-capacity crunch: a flex outage just costs standard rate on those calls,
+// logged as llm.flex_fallback_standard so it's visible, never silent.
+const FLEX_ATTEMPTS = 2;
 
 function llmStatus(err: unknown): number | undefined {
   const e = err as { status?: unknown; response?: { status?: unknown } };
@@ -180,13 +204,29 @@ function isTransientLlmError(err: unknown): boolean {
 }
 
 async function safeGenerate(prompt: string, ctx: LogContext): Promise<string> {
+  const flexEnabled = configuredServiceTier() === "flex";
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
+    const tier: "flex" | "default" =
+      flexEnabled && attempt <= FLEX_ATTEMPTS ? "flex" : "default";
+    if (flexEnabled && attempt === FLEX_ATTEMPTS + 1) {
+      // Crossed from free flex retries into billable standard — log so a capacity
+      // crunch (and the spend it causes) is visible, never silent.
+      log("warn", "llm.flex_fallback_standard", { ...ctx, afterFlexAttempts: FLEX_ATTEMPTS });
+    }
     try {
       const t = timeMs();
-      const text = await runJsonModel(prompt, 10000);
-      log("info", "llm.openai_ok", { ...ctx, latencyMs: t() });
-      return text;
+      const r = await runJsonModel(prompt, 10000, tier);
+      log("info", "llm.openai_ok", {
+        ...ctx,
+        latencyMs: t(),
+        requestedTier: tier,
+        billedTier: r.serviceTier,
+        inputTokens: r.inputTokens,
+        cachedTokens: r.cachedTokens,
+        outputTokens: r.outputTokens,
+      });
+      return r.text;
     } catch (err) {
       lastErr = err;
       if (attempt >= MAX_LLM_ATTEMPTS || !isTransientLlmError(err)) break;
@@ -194,7 +234,7 @@ async function safeGenerate(prompt: string, ctx: LogContext): Promise<string> {
         llmRetryAfterMs(err) ??
         Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
       const jitter = Math.floor(Math.random() * 400);
-      log("warn", "llm.openai_retry", { ...ctx, attempt, backoffMs: backoff }, err);
+      log("warn", "llm.openai_retry", { ...ctx, attempt, tier, backoffMs: backoff }, err);
       await new Promise((r) => setTimeout(r, backoff + jitter));
     }
   }
@@ -366,7 +406,14 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
     // the compact structured form persisted only for v2.
     const parsedOverlord = parseOverlord(jsonBehav.overlord);
     const overlord = parsedOverlord.cap;
-    rawScore = applyOverlordCap(rawScore, overlord, MAX_RAW_SCORE);
+    // SHADOW MODE (enforceJuniorOverlord): cap applied only when
+    // ETI_OVERLORD_ENFORCE_JUNIOR is set. appliedCap is what actually moved the
+    // score, so the persisted `overlord` field never claims a cap it didn't apply.
+    const appliedCap = enforceJuniorOverlord() ? overlord : undefined;
+    rawScore = applyOverlordCap(rawScore, appliedCap, MAX_RAW_SCORE);
+    if (overlord && !appliedCap) {
+      log("info", "overlord.junior_shadow", { ...ctx, wouldCap: overlord, fraudRisk: parsedOverlord.verdict?.fraud_risk });
+    }
     const score = normalizeScore(rawScore);
     const yoe = safeYoe(jsonBehav.yoe);
 
@@ -386,8 +433,9 @@ export async function runEvaluation(input: EvaluationInput, ctx: LogContext): Pr
       },
       profile: juniorProfile,
       is_matchable: score >= 50,
+      // Persist the cap actually applied (undefined when shadowed) + full verdict.
       // Omit when absent — Firestore rejects undefined fields on write.
-      ...(overlord != null && { overlord }),
+      ...(appliedCap != null && { overlord: appliedCap }),
       ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
       rawScore,
       rubric_version: rubricVersion,
@@ -574,6 +622,10 @@ async function runJuniorV2(
   const NR = n(nr.C1) + n(nr.C2);
   const parsedOverlord = parseOverlord(jsonBehav.overlord);
   const overlord = parsedOverlord.cap;
+  // SHADOW MODE (enforceJuniorOverlord): cap applied only when
+  // ETI_OVERLORD_ENFORCE_JUNIOR is set; the verdict + result-card flag are
+  // unaffected. appliedCap is what actually moved the score.
+  const appliedCap = enforceJuniorOverlord() ? overlord : undefined;
   const yoe = safeYoe(jsonBehav.yoe);
 
   // --- esq_status normalization policy ---
@@ -582,12 +634,16 @@ async function runJuniorV2(
   if (esqStatus === "unavailable") {
     // Renormalize PDQ+NR over 50; overlord cap applied in normalized space over
     // the same 50 max; then hard-cap the normalized score at 79.
-    rawScore = applyOverlordCap(PDQ + NR, overlord, JUNIOR_NO_ESQ_MAX_RAW);
+    rawScore = applyOverlordCap(PDQ + NR, appliedCap, JUNIOR_NO_ESQ_MAX_RAW);
     score = Math.min(UNAVAILABLE_SCORE_CAP, normalizeScore(rawScore, JUNIOR_NO_ESQ_MAX_RAW));
   } else {
     // ok: ESQ + PDQ + NR over 85.  no_evidence: ESQ=0 → PDQ+NR over 85 (≤59).
-    rawScore = applyOverlordCap(ESQ + PDQ + NR, overlord, MAX_RAW_SCORE);
+    rawScore = applyOverlordCap(ESQ + PDQ + NR, appliedCap, MAX_RAW_SCORE);
     score = normalizeScore(rawScore, MAX_RAW_SCORE);
+  }
+
+  if (overlord && !appliedCap) {
+    log("info", "overlord.junior_shadow", { ...ctx, wouldCap: overlord, fraudRisk: parsedOverlord.verdict?.fraud_risk });
   }
 
   log("info", "evaluation.scored", {
@@ -642,8 +698,9 @@ async function runJuniorV2(
     },
     profile: juniorProfile,
     is_matchable: score >= 50,
+    // Persist the cap actually applied (undefined when shadowed) + full verdict.
     // Omit when absent — Firestore rejects undefined fields on write.
-    ...(overlord != null && { overlord }),
+    ...(appliedCap != null && { overlord: appliedCap }),
     ...(parsedOverlord.verdict && { overlord_verdict: parsedOverlord.verdict }),
     ...(githubMetrics != null && { github_metrics: githubMetrics }),
     work_history: workHistory,
