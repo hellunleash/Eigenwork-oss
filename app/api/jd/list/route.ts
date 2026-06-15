@@ -34,6 +34,21 @@ export async function GET(req: NextRequest) {
         const createdAt = data.createdAt as { toMillis?: () => number } | null;
         const matchResult = data.matchResult as { top10?: unknown[]; completedAt?: unknown } | undefined;
         const hasMatchResult = Boolean(matchResult?.top10 && Array.isArray(matchResult.top10) && matchResult.top10.length > 0);
+
+        // Enrichment derived from the persisted shortlist (matchResult.top10) —
+        // zero extra reads, all from the jd doc already loaded. Consumed by the
+        // redesigned pipelines page (ADR-009). Older list consumers ignore the
+        // extra fields (structural typing), so this is backward-compatible.
+        const top10 = Array.isArray(matchResult?.top10)
+          ? (matchResult.top10 as Array<{ score?: number; card?: { flag?: string | null } | null }>)
+          : [];
+        const shortlistCount = top10.length;
+        const topEti = top10.length > 0
+          ? Math.max(...top10.map((c) => Number(c?.score) || 0))
+          : null;
+        const flagsCount = top10.filter((c) => c?.card?.flag).length;
+        const seniority = typeof data.seniority === "string" ? data.seniority : "";
+
         return {
           id: jobId,
           title: data.title ?? "",
@@ -42,6 +57,10 @@ export async function GET(req: NextRequest) {
           isClosed,
           appliedCount,
           hasMatchResult,
+          seniority,
+          topEti,
+          shortlistCount,
+          flagsCount,
         };
       })
     );

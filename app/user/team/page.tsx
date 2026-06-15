@@ -4,12 +4,12 @@ export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
+import { PreviewSidebar } from "../PreviewSidebar";
 
 type Role = "owner" | "admin" | "member";
 type Member = { uid: string; role: Role; email: string | null; name: string | null; isYou: boolean };
@@ -35,8 +35,8 @@ const swrFetcher = (url: string) =>
 
 const ROLE_PILL: Record<Role, string> = {
   owner: "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900",
-  admin: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
-  member: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  admin: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
+  member: "bg-gray-100 text-gray-700 dark:bg-white/[0.06] dark:text-gray-300",
 };
 
 export default function TeamPage() {
@@ -44,6 +44,7 @@ export default function TeamPage() {
   const router = useRouter();
 
   const [authChecking, setAuthChecking] = useState(true);
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [inviteEmail, setInviteEmail] = useState("");
@@ -143,56 +144,66 @@ export default function TeamPage() {
   const canManage = yourRole === "owner" || yourRole === "admin";
   const isTeam = plan === "team";
 
-  if (authChecking) {
-    return <div className="min-h-screen transition-colors duration-300" />;
-  }
+  if (authChecking) return <div className="min-h-screen bg-white dark:bg-[#0a0a0a]" />;
 
   return (
-    <div className="min-h-screen transition-colors duration-300">
+    <div
+      className={`min-h-screen bg-white dark:bg-[#0a0a0a] transition-[padding] duration-300 ${
+        navCollapsed ? "lg:pl-[68px]" : "lg:pl-[260px]"
+      }`}
+    >
+      <PreviewSidebar active="team" collapsed={navCollapsed} onToggle={() => setNavCollapsed((v) => !v)} />
+
       {/* Header */}
-      <div className="border-b border-gray-200 dark:border-white/[0.05] bg-white dark:bg-[#0a0a0e]/80 dark:backdrop-blur-md sticky top-0 z-30 transition-colors duration-300">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Link href="/user/dashboard" className="text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200">
-              ← Dashboard
-            </Link>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight dark:text-gray-100">Team</h1>
+      <div className="border-b border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#0a0a0a] sticky top-0 z-30">
+        <div className="max-w-4xl mx-auto px-6 lg:px-10 py-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <nav className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <a href="/user/dashboard" className="hover:text-gray-900 dark:hover:text-gray-200">Dashboard</a>
+                <ChevronTiny />
+                <span className="text-gray-700 dark:text-gray-200 font-medium">Team</span>
+              </nav>
+              <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">Team</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Invite teammates and manage who can review your candidate pipelines.</p>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg text-xs font-medium capitalize bg-gray-100 text-gray-700 dark:bg-white/[0.06] dark:text-gray-300">
+              {plan ? plan.replace("_", " ") : "Free"} plan
+            </span>
           </div>
-          <span className="px-3 py-1.5 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium capitalize dark:bg-gray-800 dark:text-gray-200">
-            {plan ? plan.replace("_", " ") : "Free"} plan
-          </span>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-4xl mx-auto px-6 lg:px-10 py-8 space-y-6">
         {error && (
-          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 dark:text-red-400 dark:bg-red-950/40 dark:border-red-800">
+          <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 dark:text-rose-300 dark:bg-rose-500/10 dark:border-rose-500/20">
             {error}
           </div>
         )}
 
         {/* Plan gate */}
         {!isTeam && !loading && (
-          <div className="bg-white border border-gray-200 rounded-xl p-6 dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100">Bring your team</h2>
+          <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100 tracking-tight">Bring your team</h2>
             <p className="text-sm text-gray-600 mb-4 dark:text-gray-400">
               The Team plan adds a shared workspace — invite teammates as Admins or Members so
               everyone reviews the same candidate pipelines. You&apos;re currently on the{" "}
               <span className="font-medium">{plan ? plan.replace("_", " ") : "Free"}</span> plan.
             </p>
-            <Link
-              href="/user/dashboard"
-              className="inline-block px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
+            <button
+              type="button"
+              onClick={() => router.push("/user/billing")}
+              className="inline-flex items-center px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
             >
               Upgrade to Team
-            </Link>
+            </button>
           </div>
         )}
 
         {/* Invite */}
         {isTeam && canManage && (
-          <section className="bg-white border border-gray-200 rounded-xl p-6 dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100">Invite a teammate</h2>
+          <section className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100 tracking-tight">Invite a teammate</h2>
             <p className="text-sm text-gray-600 mb-4 dark:text-gray-400">
               They&apos;ll get a link to join with their Google account. The invite is locked to
               the email you enter.
@@ -203,12 +214,12 @@ export default function TeamPage() {
                 placeholder="teammate@company.com"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm dark:border-white/[0.1] dark:text-gray-100 dark:bg-white/[0.02]"
+                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.02] text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500/40"
               />
               <select
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as "member" | "admin")}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-gray-900 text-sm bg-white dark:border-white/[0.1] dark:text-gray-100 dark:bg-white/[0.02]"
+                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.02] text-gray-900 dark:text-gray-100 text-sm"
               >
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
@@ -223,7 +234,7 @@ export default function TeamPage() {
               </button>
             </div>
             {lastInviteLink && (
-              <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 dark:bg-emerald-950/40 dark:border-emerald-800">
+              <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 dark:bg-emerald-500/10 dark:border-emerald-500/20">
                 <code className="text-xs text-emerald-900 truncate flex-1 dark:text-emerald-200">{lastInviteLink}</code>
                 <button
                   type="button"
@@ -238,16 +249,16 @@ export default function TeamPage() {
         )}
 
         {/* Members */}
-        <section className="bg-white border border-gray-200 rounded-xl overflow-hidden dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
-          <div className="px-6 py-4 border-b border-gray-200 dark:border-white/[0.05]">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+        <section className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05]">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
               Members {loading ? "" : `(${members.length})`}
             </h2>
           </div>
           {loading ? (
             <div className="p-6 space-y-3">
               {[0, 1].map((i) => (
-                <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse dark:bg-gray-800" />
+                <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse dark:bg-white/[0.04]" />
               ))}
             </div>
           ) : (
@@ -284,7 +295,7 @@ export default function TeamPage() {
                             type="button"
                             disabled={busy === mem.uid}
                             onClick={() => manage("remove", mem.uid)}
-                            className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
+                            className="text-xs text-rose-600 hover:text-rose-700 disabled:opacity-50 dark:text-rose-400 dark:hover:text-rose-300"
                           >
                             Remove
                           </button>
@@ -300,9 +311,9 @@ export default function TeamPage() {
 
         {/* Pending invites */}
         {isTeam && canManage && invites.length > 0 && (
-          <section className="bg-white border border-gray-200 rounded-xl overflow-hidden dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-white/[0.05]">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Pending invites ({invites.length})</h2>
+          <section className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05]">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Pending invites ({invites.length})</h2>
             </div>
             <ul className="divide-y divide-gray-100 dark:divide-white/[0.05]">
               {invites.map((inv) => (
@@ -326,4 +337,8 @@ export default function TeamPage() {
       </div>
     </div>
   );
+}
+
+function ChevronTiny() {
+  return <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>;
 }

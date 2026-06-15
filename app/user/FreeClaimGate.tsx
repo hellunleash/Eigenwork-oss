@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { getDeviceFingerprint } from "@/lib/fingerprint";
-import { TurnstileWidget } from "../../components/TurnstileWidget";
+import { TurnstileWidget } from "../components/TurnstileWidget";
 
 /**
  * Shown when a freshly-provisioned org has no active pass. Claims the Free
  * pass (100 screens) after a device-fingerprint + Cloudflare Turnstile check.
  * Degrades gracefully: if NEXT_PUBLIC_TURNSTILE_SITE_KEY is unset, the widget
  * renders nothing and it runs fingerprint-only.
+ *
+ * Shared by the dashboard overview (/user/dashboard) and the role-pipelines
+ * list (/user/pipelines) — both land here when entitlement.plan === null.
  */
 export function FreeClaimGate({ onClaimed }: { onClaimed: () => void }) {
   const [busy, setBusy] = useState(false);

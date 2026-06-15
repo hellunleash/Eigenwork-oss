@@ -49,16 +49,13 @@
   color: #f1f5f9;
 }
 
-.dark body {
-  background-color: var(--background);
-  background-image: radial-gradient(ellipse 80% 80% at 50% -20%, rgba(120, 119, 198, 0.15), rgba(255, 255, 255, 0));
-  background-attachment: fixed;
-}
+/* NOTE: the violet radial gradient that used to live here on body / .dark body has
+   been removed for the home-v2 redesign — it made the whole product look
+   AI-template-y. Pages that want a textured background apply the dot grid
+   inline via `style={{ backgroundImage: "radial-gradient(circle, ...)" }}`. */
 
 body {
   background-color: var(--background);
-  background-image: radial-gradient(ellipse 80% 80% at 50% -20%, rgba(120, 119, 198, 0.06), rgba(255, 255, 255, 0));
-  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-sans, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
   -webkit-font-smoothing: antialiased;
@@ -122,8 +119,154 @@ body {
 
 /* B2B SaaS: subtle gradient mesh background */
 .bg-hero-mesh {
-  background: 
+  background:
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.08), transparent),
     radial-gradient(ellipse 60% 40% at 100% 0%, rgba(99, 102, 241, 0.04), transparent),
     radial-gradient(ellipse 60% 40% at 0% 50%, rgba(99, 102, 241, 0.03), transparent);
+}
+
+/* ============================================================================
+   home-v2 motion system
+   Premium, restrained motion: scroll-reveal, live product animation, marquee,
+   shimmer, drifting brand-accent glow. Plain CSS classes (not Tailwind utils) so
+   they work regardless of the build. Everything collapses to a static final
+   state under prefers-reduced-motion: reduce (bottom of this block).
+   ============================================================================ */
+
+/* Scroll reveal — toggled by the <Reveal> client component (IntersectionObserver). */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  filter: blur(6px);
+  transition:
+    opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform, filter;
+}
+.reveal-in {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+}
+
+/* Staggered child reveal — <Reveal stagger>. The container is only the in-view
+   trigger; each marked .r-item cascades in. Per-item delay is set via inline
+   transition-delay where the item is authored. */
+.reveal-group .r-item {
+  opacity: 0;
+  transform: translateY(22px);
+  filter: blur(4px);
+  transition:
+    opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform, filter;
+}
+.reveal-group.is-in .r-item {
+  opacity: 1;
+  transform: none;
+  filter: blur(0);
+}
+
+/* Infinite logo marquee. Track holds two identical rows; -50% loops seamlessly. */
+@keyframes marquee-x {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee-x 34s linear infinite;
+}
+.marquee-mask {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+
+/* Shimmer sweep — progress bar / scanning state. */
+@keyframes shimmer-x {
+  from { transform: translateX(-120%); }
+  to   { transform: translateX(420%); }
+}
+.animate-shimmer {
+  animation: shimmer-x 1.4s ease-in-out infinite;
+}
+
+/* Vertical scan line that sweeps the candidate list while ranking. */
+@keyframes scan-y {
+  0%   { top: 0%;   opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+.animate-scan {
+  animation: scan-y 1.9s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Badge pop — fires when the live ranking resolves a candidate. */
+@keyframes badge-pop {
+  0%   { opacity: 0; transform: scale(0.82); }
+  60%  { opacity: 1; transform: scale(1.06); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.animate-badge-pop {
+  animation: badge-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Slow drifting brand-accent glow behind the hero card (replaces the purple mesh). */
+@keyframes aurora-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1);    opacity: 0.7; }
+  50%      { transform: translate3d(4%, -5%, 0) scale(1.1); opacity: 1; }
+}
+.animate-aurora {
+  animation: aurora-drift 15s ease-in-out infinite;
+}
+
+/* Live status dot. */
+@keyframes live-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+.animate-live-pulse {
+  animation: live-pulse 2s ease-out infinite;
+}
+
+/* Sheen sweep across a button on hover. */
+.sheen { position: relative; overflow: hidden; }
+.sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-130%);
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.sheen:hover::after { transform: translateX(130%); }
+
+/* Hover lift for interactive cards. */
+.hover-lift {
+  transition:
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.35s ease,
+    border-color 0.35s ease;
+}
+.hover-lift:hover { transform: translateY(-4px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal-group .r-item {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    transition: none !important;
+  }
+  .animate-marquee,
+  .animate-shimmer,
+  .animate-scan,
+  .animate-badge-pop,
+  .animate-aurora,
+  .animate-live-pulse { animation: none !important; }
+  .sheen::after { display: none; }
+  .hover-lift:hover { transform: none; }
 }

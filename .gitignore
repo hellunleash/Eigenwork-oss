@@ -52,3 +52,12 @@ coverage/
 *.log
 .cache/
 .env.cloudrun.yaml
+
+# Claude Code local state (agent worktrees + local agent state) — not source
+.claude/
+
+# Stray / accidental root dir (e.g. a literal "~" created by a misfired command)
+/~/
+
+# Private — personal CV kept locally for reference, not product content
+docs/Personal_cv_for interview prpose/

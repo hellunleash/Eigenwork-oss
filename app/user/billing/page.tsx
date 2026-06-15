@@ -13,6 +13,7 @@ import useSWR from "swr";
 import { usePageTitle } from "@/lib/use-page-title";
 import { WALLET_UNIT_PRICE, WALLET_MIN_QTY, WALLET_MAX_QTY } from "@/lib/wallet-config";
 import { BILLING_EMAIL } from "@/lib/contact";
+import { PreviewSidebar } from "../PreviewSidebar";
 
 declare global {
   interface Window {
@@ -52,6 +53,7 @@ export default function BillingPage() {
   const router = useRouter();
 
   const [authChecking, setAuthChecking] = useState(true);
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [walletQty, setWalletQty] = useState(1000);
   const [busy, setBusy] = useState<Kind | null>(null);
   const paddleInit = useRef(false);
@@ -114,53 +116,74 @@ export default function BillingPage() {
     }
   };
 
-  if (authChecking) return <div className="min-h-screen transition-colors duration-300" />;
+  if (authChecking) return <div className="min-h-screen bg-white dark:bg-[#0a0a0a]" />;
 
   const plan = me?.plan ?? "free";
   const expiry =
     me?.expiresAtMs != null ? new Date(me.expiresAtMs).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
+  const screenCap = me?.screenCap ?? 0;
+  const screensUsed = me?.screensUsed ?? 0;
+  const usedPct = screenCap > 0 ? Math.min(100, Math.round((screensUsed / screenCap) * 100)) : 0;
 
   return (
-    <div className="min-h-screen transition-colors duration-300">
+    <div
+      className={`min-h-screen bg-white dark:bg-[#0a0a0a] transition-[padding] duration-300 ${
+        navCollapsed ? "lg:pl-[68px]" : "lg:pl-[260px]"
+      }`}
+    >
       <Script src="https://cdn.paddle.com/paddle/v2/paddle.js" strategy="lazyOnload" onLoad={handlePaddleLoad} />
+      <PreviewSidebar active="billing" collapsed={navCollapsed} onToggle={() => setNavCollapsed((v) => !v)} />
 
-      {/* Nav */}
-      <div className="border-b border-gray-200 dark:border-white/[0.05] bg-white dark:bg-[#0a0a0e]/80 dark:backdrop-blur-md sticky top-0 z-30 transition-colors duration-300">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/user/dashboard" className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
-              ← Dashboard
+      {/* Header */}
+      <div className="border-b border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#0a0a0a] sticky top-0 z-30">
+        <div className="max-w-5xl mx-auto px-6 lg:px-10 py-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <nav className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <a href="/user/dashboard" className="hover:text-gray-900 dark:hover:text-gray-200">Dashboard</a>
+                <ChevronTiny />
+                <span className="text-gray-700 dark:text-gray-200 font-medium">Billing</span>
+              </nav>
+              <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">Billing</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Plans, screen usage, and prepaid wallet top-ups.</p>
+            </div>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/[0.08] hover:bg-gray-50 dark:hover:bg-white/[0.04]"
+            >
+              Compare plans
             </Link>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Billing</h1>
           </div>
-          <Link href="/pricing" className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
-            Compare plans
-          </Link>
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-6 py-10">
+      <div className="max-w-5xl mx-auto px-6 lg:px-10 py-8">
         {/* Current status */}
-        <div className="mb-8 bg-white border border-gray-200 rounded-xl dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none p-5 flex flex-wrap items-center justify-between gap-4">
+        <div className="mb-8 bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6 flex flex-wrap items-center justify-between gap-6">
           <div>
-            <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 font-medium">Current plan</p>
-            <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{planLabel(plan)}</p>
+            <p className="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold">Current plan</p>
+            <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{planLabel(plan)}</p>
             {expiry && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Valid until {expiry}</p>}
           </div>
-          <div className="flex gap-6">
+          <div className="flex items-center gap-8">
             <div>
-              <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 font-medium">Screens left</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{(me?.screensRemaining ?? 0).toLocaleString()}</p>
+              <p className="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold">Screens left</p>
+              <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{(me?.screensRemaining ?? 0).toLocaleString()}</p>
+              {screenCap > 0 && (
+                <div className="mt-2 w-36 h-1.5 bg-gray-100 dark:bg-white/[0.05] rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-emerald-500" style={{ width: `${usedPct}%` }} />
+                </div>
+              )}
             </div>
             <div>
-              <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 font-medium">Wallet</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{(me?.walletBalance ?? 0).toLocaleString()}</p>
+              <p className="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold">Wallet</p>
+              <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{(me?.walletBalance ?? 0).toLocaleString()}</p>
             </div>
           </div>
         </div>
 
         {/* Plans */}
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Plans</h2>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 tracking-tight">Plans</h2>
         <div className="grid md:grid-cols-2 gap-5 mb-10">
           <PlanCard
             name="Single Role"
@@ -199,8 +222,8 @@ export default function BillingPage() {
         </div>
 
         {/* Wallet top-up */}
-        <div className="bg-white border border-gray-200 rounded-xl dark:bg-white/[0.02] dark:border-white/[0.05] shadow-sm dark:shadow-none p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Screen Wallet</h2>
+        <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1 tracking-tight">Screen Wallet</h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
             Prepaid overage at <span className="font-medium text-gray-900 dark:text-gray-200">${WALLET_UNIT_PRICE.toFixed(2)}/screen</span>. Top up any
             amount; drawn from once your plan&apos;s screens run out — never expires.
@@ -225,7 +248,7 @@ export default function BillingPage() {
                   }
                   setWalletQty(Math.min(WALLET_MAX_QTY, v));
                 }}
-                className="block w-36 mt-1 px-3 py-2 border border-gray-300 dark:border-white/[0.1] bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg"
+                className="block w-36 mt-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.02] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500/40"
               />
             </label>
             <button
@@ -260,6 +283,10 @@ export default function BillingPage() {
   );
 }
 
+function ChevronTiny() {
+  return <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>;
+}
+
 function PlanCard(props: {
   name: string;
   price: string;
@@ -274,21 +301,21 @@ function PlanCard(props: {
 }) {
   return (
     <div
-      className={`rounded-xl border p-6 flex flex-col ${
-        props.highlight ? "border-gray-900 dark:border-indigo-500 bg-white dark:bg-white/[0.02] shadow-sm" : "border-gray-200 dark:border-white/[0.05] bg-white dark:bg-white/[0.02]"
+      className={`rounded-2xl border p-6 flex flex-col bg-white dark:bg-white/[0.02] ${
+        props.highlight ? "border-gray-900 dark:border-emerald-500/40 shadow-sm" : "border-gray-200/80 dark:border-white/[0.06]"
       }`}
     >
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{props.name}</h3>
         {props.current && (
-          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300">
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-500/15 text-emerald-800 dark:text-emerald-300">
             Current
           </span>
         )}
       </div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{props.tagline}</p>
       <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-4xl font-bold text-gray-900 dark:text-gray-100">{props.price}</span>
+        <span className="text-4xl font-semibold text-gray-900 dark:text-gray-100">{props.price}</span>
       </div>
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-5">{props.cadence}</p>
       <button
@@ -297,8 +324,8 @@ function PlanCard(props: {
         onClick={props.onClick}
         className={`w-full py-2.5 rounded-lg text-sm font-medium mb-5 disabled:opacity-50 transition-colors ${
           props.highlight
-            ? "bg-gray-900 dark:bg-indigo-600 text-white hover:bg-gray-800 dark:hover:bg-indigo-700"
-            : "border border-gray-300 dark:border-white/[0.1] text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800"
+            ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200"
+            : "border border-gray-200 dark:border-white/[0.1] text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/[0.04]"
         }`}
       >
         {props.busy ? "Opening…" : props.cta}
@@ -306,7 +333,7 @@ function PlanCard(props: {
       <ul className="space-y-2 mt-auto">
         {props.features.map((f) => (
           <li key={f} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <span className="text-gray-400 dark:text-gray-500 mt-0.5">✓</span>
+            <span className="text-emerald-500 mt-0.5">✓</span>
             {f}
           </li>
         ))}

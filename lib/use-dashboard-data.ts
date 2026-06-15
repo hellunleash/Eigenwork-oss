@@ -12,6 +12,13 @@ type Pipeline = {
   isClosed: boolean;
   appliedCount: number;
   hasMatchResult?: boolean;
+  // Enrichment from GET /api/jd/list (ADR-009): derived from the persisted
+  // matchResult.top10 at no extra read cost. Optional — legacy list consumers
+  // ignore them, and they are absent until a shortlist has been generated.
+  seniority?: string;
+  topEti?: number | null;
+  shortlistCount?: number;
+  flagsCount?: number;
 };
 
 type Entitlement = {
