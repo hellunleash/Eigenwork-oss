@@ -5,6 +5,7 @@ import { allowRequest } from "@/lib/rate-limit";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
 import { canEvaluate } from "@/lib/entitlements";
 import { verifyTurnstile } from "@/lib/turnstile";
+import { normalizeSource } from "@/lib/source-attribution";
 
 
 // Junior path can spend 35-60s in Doc AI + GitHub + 2 LLM calls. 60s left no
@@ -68,6 +69,7 @@ export async function POST(req: NextRequest) {
       resumeBase64,
       githubUrl,
       projectLinks,
+      source,
       jobId
     } = body;
 
@@ -303,6 +305,11 @@ export async function POST(req: NextRequest) {
     // ------------------------------------------------------
     // Create candidate stub (processing) + upload resume + enqueue job
     // ------------------------------------------------------
+    // Channel attribution (ADR-009 §7 KPI #7). The client resolves it via the
+    // ?src= ?? document.referrer ?? self-report waterfall; we canonicalize it
+    // here and only persist when present (conditional spread below — Firestore
+    // rejects undefined). Null/empty stays off the doc (dark social / referral).
+    const candidateSource = normalizeSource(typeof source === "string" ? source : null);
     const db = getAdminDb();
     const docRef = await db.collection("candidates").add({
       candidateName: name ?? "",
@@ -311,6 +318,7 @@ export async function POST(req: NextRequest) {
         jobId: jobId ?? null,
         workTypes,
         locations,
+        ...(candidateSource != null && { source: candidateSource }),
         // Work-authorization regions drive workAuthMatch() in the match
         // pipeline. The intake form collects and requires these; persisting
         // them here is mandatory — without it every JD with a US/EU work-auth

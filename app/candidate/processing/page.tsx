@@ -30,6 +30,7 @@ export default function ProcessingPage() {
         jobId?: string;
         resumeBase64?: string;
         githubUrl?: string;
+        source?: string; // ADR-009 §7 channel attribution; forwarded as-is below
         [key: string]: unknown;
       };
       if (candidateData?.jobId) setJobId(candidateData.jobId);
