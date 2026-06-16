@@ -1,8 +1,20 @@
 'use client';
 export const dynamic = 'force-dynamic';
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TurnstileWidget } from '../components/TurnstileWidget';
+import { DARK_SOCIAL_BUCKETS, referrerToSource, normalizeSource } from '@/lib/source-attribution';
+
+// Fisher–Yates shuffle — randomize the self-report option order to curb
+// top-of-list bias (ADR-009 §7). Returns a new array; does not mutate input.
+function shuffled<T>(items: readonly T[]): T[] {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 
 type WorkType = 'Intern' | 'Full-time' | 'Contract';
 type LocationType = 'Remote' | 'Hybrid' | 'Onsite';
@@ -42,6 +54,24 @@ function CandidatePageContent() {
   // Honeypot: real users never see or fill this; bots do, and get rejected.
   const [hpField, setHpField] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
+
+  // Source attribution (ADR-009 §7). The auto-detect waterfall runs once, in a
+  // lazy state initializer (no effect → no cascading-render lint), against the
+  // browser APIs available on this client-rendered subtree (the page is
+  // force-dynamic and behind a Suspense/useSearchParams boundary, so this body
+  // renders on the client where document.referrer is available):
+  //   1. ?src= in the URL wins (power users / tagged links).
+  //   2. else map document.referrer's origin to a channel.
+  //   3. else null → ask the candidate (DM / native-app referrer is dark).
+  const [source] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null; // SSR guard (subtree is client-only)
+    const fromParam = normalizeSource(searchParams.get('src'));
+    return fromParam ?? referrerToSource(document.referrer);
+  });
+  const [sourceSelfReport, setSourceSelfReport] = useState('');
+  const darkSocialOptions = useMemo(() => shuffled(DARK_SOCIAL_BUCKETS), []);
+  // Ask only on miss: auto-detect found nothing, so the candidate self-reports.
+  const askSource = source == null;
 
   // JD-based lock: when jobId in URL, we fetch JD and lock work type + location to JD values from confirm page
   const [jdLoading, setJdLoading] = useState<boolean>(() => Boolean(jobIdFromUrl));
@@ -255,6 +285,12 @@ function CandidatePageContent() {
       newErrors.push('Please provide your GitHub repo URL');
     }
 
+    // "How did you hear about this role?" is required only when we couldn't
+    // auto-detect the source (referrer was empty/unknown).
+    if (askSource && !sourceSelfReport) {
+      newErrors.push('Please tell us how you heard about this role');
+    }
+
     setErrors(newErrors);
     return newErrors.length === 0;
   };
@@ -283,6 +319,10 @@ function CandidatePageContent() {
         resumeBase64 = await fileToBase64(resume);
       }
 
+      // Resolve the channel (ADR-009 §7): auto-detected source wins; otherwise
+      // the candidate's self-report (only collected when detection missed).
+      const resolvedSource = source ?? normalizeSource(sourceSelfReport);
+
       // 2. Prepare the payload
       const formData = {
         name: name.trim(),
@@ -299,6 +339,7 @@ function CandidatePageContent() {
         projectLinks,
         website: hpField, // honeypot — server rejects if non-empty
         turnstileToken, // Cloudflare Turnstile token (verified server-side)
+        ...(resolvedSource != null ? { source: resolvedSource } : {}),
         ...(jobIdFromUrl ? { jobId: jobIdFromUrl } : {}),
       };
       if (typeof window !== 'undefined') {
@@ -631,6 +672,34 @@ function CandidatePageContent() {
               </div>
             </div>
           </div>
+
+          {/* How did you hear about this role? — asked only when we couldn't
+              auto-detect the source from the referrer (ADR-009 §7). Options are
+              shown in a randomized order to curb top-of-list bias. */}
+          {askSource && (
+            <div className="space-y-4">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-6">
+                One quick question
+              </h2>
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-3">
+                  How did you hear about this role? <span className="text-red-600">*</span>
+                </label>
+                <select
+                  value={sourceSelfReport}
+                  onChange={(e) => setSourceSelfReport(e.target.value)}
+                  className="w-full max-w-xs px-3 py-2 text-sm text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-white/[0.1] rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500/40 dark:focus:ring-emerald-400/40 bg-white dark:bg-white/[0.02]"
+                >
+                  <option value="">Select an option</option>
+                  {darkSocialOptions.map((bucket) => (
+                    <option key={bucket} value={bucket}>
+                      {bucket}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
 
           {/* Section 3: The Artifacts */}
           <div className="space-y-6">
