@@ -90,6 +90,16 @@ export async function PATCH(req: Request, context: RouteContext) {
 
     await ref.update(update);
 
+    // Stamp the parent JD on the FIRST hire so time-to-fill (KPI #1) and roles-filled
+    // (KPI #2) anchor on when the req actually closed. First-write-wins: reuse the
+    // ownership snapshot fetched above and only stamp if hiredAt isn't already set.
+    if (stage === "hired" && !jdSnap.data()?.hiredAt) {
+      await db.collection("jds").doc(candidateJobId).update({
+        hiredAt: now,
+        hiredCandidateId: id,
+      });
+    }
+
     log("info", "candidate.stage_moved", { requestId, route, candidateId: id, jobId: candidateJobId, stage, userId: ctx.userId });
     return NextResponse.json({ success: true, stage });
   } catch (err) {
