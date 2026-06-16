@@ -75,10 +75,16 @@ export type Candidate = {
   card?: Card;
   github_metrics?: GithubMetricsView;
   work_history?: WorkHistoryEntry[];
+  // ADR-009 shortlist funnel: rank in the shortlist (1-20) + the candidate's
+  // attributed source. Present on entries from the top-20 match response.
+  shortlistRank?: number;
+  source?: string | null;
 };
 
 type MatchResultsResponse = {
-  top10: Candidate[];
+  // ADR-009: the match response key is `top20` (renamed from `top10`); the
+  // shortlist now surfaces 20 ranked candidates for top-10 vs top-20 depth.
+  top20: Candidate[];
   etiDistribution?: EtiDistribution;
   seniority?: string;
   success?: boolean;
@@ -146,13 +152,13 @@ export function useResultsData(jobId: string | null) {
     return () => unsubscribe();
   }, [mutate]);
 
-  // Extract top10 candidates
-  const top10: Candidate[] = data?.top10 ?? [];
+  // Extract top-20 candidates (ADR-009 — renamed from top10).
+  const top20: Candidate[] = data?.top20 ?? [];
   const etiDistribution: EtiDistribution =
     data?.etiDistribution ?? buildEtiDistributionFromScores([]);
 
   // Determine loading state (only true if we have no cached data)
-  const isLoadingData = isLoading && top10.length === 0;
+  const isLoadingData = isLoading && top20.length === 0;
 
   // Determine error state
   const errorMessage = error
@@ -167,7 +173,7 @@ export function useResultsData(jobId: string | null) {
   const seniority: string = data?.seniority ?? "";
 
   return {
-    top10,
+    top20,
     etiDistribution,
     seniority,
     isLoading: isLoadingData,
