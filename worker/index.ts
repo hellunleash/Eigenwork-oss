@@ -44,7 +44,7 @@ import {
   FieldValue,
 } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
-import { computeKpiSnapshot } from "@/lib/kpi/compute";
+import { computeKpiSnapshotBQ } from "./kpi-bigquery";
 import { makeOpId } from "@/lib/credit-ledger";
 import { consumeEval } from "@/lib/entitlements";
 import {
@@ -1079,9 +1079,11 @@ async function handleCascadeDelete(req: ExpressRequest, res: ExpressResponse): P
 }
 
 // ---------------------------------------------------------------------------
-// KPI aggregation (ADR-009) — cron-driven Firestore-direct snapshot writer.
-// Cloud Scheduler hits this per the schedule; for each org it computes the 7
-// KPIs and caches them at kpi_snapshots/{orgId} so the dashboard reads ONE doc.
+// KPI aggregation (ADR-009) — cron-driven BigQuery-backed snapshot writer.
+// Cloud Scheduler hits this per the schedule; for each org it runs the 7 KPIs
+// over the BigQuery latest-state views (computeKpiSnapshotBQ) and caches them at
+// kpi_snapshots/{orgId} so the dashboard reads ONE doc. Firestore reads here are
+// just the org list + each org's org_targets (BigQuery isn't billed for those).
 // ---------------------------------------------------------------------------
 
 async function handleKpiAggregate(req: ExpressRequest, res: ExpressResponse): Promise<void> {
@@ -1114,7 +1116,11 @@ async function handleKpiAggregate(req: ExpressRequest, res: ExpressResponse): Pr
     let failed = 0;
     for (const orgId of orgIds) {
       try {
-        const snapshot = await computeKpiSnapshot(db, orgId);
+        // org_targets isn't mirrored to BigQuery — read it straight from
+        // Firestore (one tiny doc) and pass the map into the BQ aggregator.
+        const targetsSnap = await db.collection("org_targets").doc(orgId).get();
+        const orgTargets = targetsSnap.exists ? (targetsSnap.data() as Record<string, unknown>) : null;
+        const snapshot = await computeKpiSnapshotBQ(orgId, orgTargets);
         await db.collection("kpi_snapshots").doc(orgId).set(snapshot);
         processed += 1;
       } catch (err) {
