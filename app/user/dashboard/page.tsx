@@ -19,7 +19,9 @@ export const dynamic = "force-dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
+import useSWR from "swr";
 import { auth } from "@/lib/firebase";
+import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { FreeClaimGate } from "../FreeClaimGate";
@@ -27,6 +29,39 @@ import { PreviewSidebar } from "../PreviewSidebar";
 
 const notifySoon = (label: string) =>
   typeof window !== "undefined" && window.alert(`${label} isn’t wired up yet — coming soon.`);
+
+// ----- KPI snapshot (ADR-009) ------------------------------------------
+// The KPI engine writes a single kpi_snapshots/{orgId} doc; GET /api/kpi
+// returns { snapshot: KpiSnapshot | null } (authed). Declared locally so this
+// file does not depend on the sibling unit's not-yet-merged contract module —
+// it's a structural match for the shared shape.
+type Funnel = { selected: number; cleared: number; rate: number | null };
+type KpiSnapshot = {
+  orgId: string;
+  computedAt: number;
+  windowDays: number;
+  period: string;
+  timeToFill: { medianDays: number | null; hires: number; belowThreshold: boolean };
+  rolesFilled: { hired: number; target: number | null };
+  offerAcceptance: { accepted: number; extended: number; rate: number | null };
+  inflatedProfiles: { count: number };
+  pipelineByStage: { screening: number; interviewing: number; offer: number; hired: number; rejected: number; withdrawn: number; openReqs: number };
+  shortlistQuality: { top10: Funnel; top20: Funnel; ranks11to20: Funnel };
+  sources: Array<{ name: string; submissions: number; top10: number; selected: number; cleared: number; hires: number; top10Penetration: number; clearRate: number | null }>;
+};
+
+// Authed fetch mirroring lib/use-dashboard-data.ts — sends the Firebase ID
+// token, returns { snapshot }.
+async function kpiFetcher(url: string): Promise<{ snapshot: KpiSnapshot | null }> {
+  const token = await getIdTokenOrNull();
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+  if (!res.ok) {
+    const error = new Error("An error occurred while fetching the data.");
+    (error as unknown as { status?: number }).status = res.status;
+    throw error;
+  }
+  return res.json();
+}
 
 // ----- Types -----------------------------------------------------------
 
@@ -113,6 +148,23 @@ export default function DashboardPage() {
 
   const { pipelines, entitlement, isLoading, revalidate } = useDashboardData(userId);
 
+  // KPI snapshot (ADR-009). null until the engine has run for this org / new org —
+  // every tile keeps its existing empty-state design as the fallback in that case.
+  const { data: kpiData } = useSWR<{ snapshot: KpiSnapshot | null }>(
+    userId ? "/api/kpi" : null,
+    kpiFetcher,
+    {
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 2000,
+      refreshInterval: 0,
+      onError: (error) => {
+        console.error("Failed to fetch KPI snapshot:", error);
+      },
+    }
+  );
+  const snapshot = kpiData?.snapshot ?? null;
+
   const rows = pipelines as Pipeline[];
   const activeRoles = useMemo(() => rows.filter((p) => !p.isClosed).length, [rows]);
   const health: HealthRow[] = useMemo(
@@ -153,6 +205,46 @@ export default function DashboardPage() {
     entitlement?.expiresAtMs != null
       ? new Date(entitlement.expiresAtMs).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
       : null;
+
+  // KPI tile values (ADR-009). Each falls back to the existing empty-state value
+  // when the snapshot is absent (engine hasn't run / new org) or the field is
+  // null / below its honesty threshold — markup is unchanged either way.
+  const timeToFillValue =
+    snapshot && !snapshot.timeToFill.belowThreshold && snapshot.timeToFill.medianDays != null
+      ? String(snapshot.timeToFill.medianDays)
+      : "—";
+  const rolesHired = snapshot ? snapshot.rolesFilled.hired : 0;
+  const rolesTarget = snapshot ? snapshot.rolesFilled.target : null;
+  const hasRolesTarget = rolesTarget != null;
+  const offerRateValue =
+    snapshot && snapshot.offerAcceptance.rate != null
+      ? String(Math.round(snapshot.offerAcceptance.rate))
+      : "—";
+  const inflatedValue = snapshot ? snapshot.inflatedProfiles.count : 0;
+  // Shortlist quality — snapshot funnels feed the same rows the sample data did.
+  // Falls back to the SHORTLIST_TIERS sample when the snapshot is absent.
+  const shortlistTiers: ShortlistTier[] = snapshot
+    ? [
+        { label: "Top 10",      sub: `${snapshot.shortlistQuality.top10.selected} of 10 selected`,      passed: snapshot.shortlistQuality.top10.cleared,      interviewed: snapshot.shortlistQuality.top10.selected,      tone: "bg-teal-500" },
+        { label: "Top 20",      sub: `${snapshot.shortlistQuality.top20.selected} of 20 selected`,      passed: snapshot.shortlistQuality.top20.cleared,      interviewed: snapshot.shortlistQuality.top20.selected,      tone: "bg-emerald-500" },
+        { label: "Ranks 11–20", sub: `${snapshot.shortlistQuality.ranks11to20.selected} selected`,      passed: snapshot.shortlistQuality.ranks11to20.cleared, interviewed: snapshot.shortlistQuality.ranks11to20.selected, tone: "bg-amber-500" },
+      ]
+    : SHORTLIST_TIERS;
+  // Shortlist headline = top-10 clear rate. With a snapshot, a null rate (empty
+  // funnel) resolves to 0% so the headline stays consistent with its own "0 of 0"
+  // sub-line; the sample 88/75 are used ONLY as the no-snapshot fallback.
+  const top10Funnel = snapshot?.shortlistQuality.top10 ?? null;
+  const top20Funnel = snapshot?.shortlistQuality.top20 ?? null;
+  const shortlistTop10Pct = top10Funnel ? Math.round(top10Funnel.rate ?? 0) : 88;
+  const shortlistTop20Pct = top20Funnel ? Math.round(top20Funnel.rate ?? 0) : 75;
+  const shortlistHeadlineSub = top10Funnel
+    ? `${top10Funnel.cleared} of ${top10Funnel.selected} selected from your top 10 cleared interview`
+    : "7 of 8 selected from your top 10 cleared interview";
+  // The funnel contract carries selected/cleared only — no total-shortlisted-pool
+  // count — so the "N shortlisted" sub can't be honestly derived from a snapshot;
+  // show "—" rather than fabricate one. Window length is real, so it's wired.
+  const shortlistCountLabel = snapshot ? "—" : "50";
+  const shortlistWindowLabel = snapshot ? `last ${snapshot.windowDays} days` : "last 90 days";
 
   if (authChecking || isLoading) {
     return (
@@ -234,25 +326,27 @@ export default function DashboardPage() {
           <div className="grid grid-cols-12 gap-3">
             <EmptyKpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="sky">
               <KpiLabel icon={<IconClock />}>Time-to-fill</KpiLabel>
-              <EmptyValue>—<span className="text-base font-normal text-gray-400 ml-1">days</span></EmptyValue>
+              <EmptyValue>{timeToFillValue}<span className="text-base font-normal text-gray-400 ml-1">days</span></EmptyValue>
               <EmptyHint>Activates after your first hire</EmptyHint>
               <SparklineOutline stroke="stroke-sky-300 dark:stroke-sky-500/30" />
             </EmptyKpiTile>
             <EmptyKpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
               <KpiLabel icon={<IconTarget />}>Roles filled vs target</KpiLabel>
-              <EmptyValue>0<span className="text-base font-normal text-gray-400 ml-1">/ —</span></EmptyValue>
-              <button type="button" onClick={() => notifySoon("Hiring targets")} className="mt-1 text-[11px] text-sky-600 dark:text-sky-400 font-medium hover:underline inline-flex items-center gap-1">Set quarterly target →</button>
+              <EmptyValue>{rolesHired}<span className="text-base font-normal text-gray-400 ml-1">/ {hasRolesTarget ? rolesTarget : "—"}</span></EmptyValue>
+              {!hasRolesTarget && (
+                <button type="button" onClick={() => notifySoon("Hiring targets")} className="mt-1 text-[11px] text-sky-600 dark:text-sky-400 font-medium hover:underline inline-flex items-center gap-1">Set quarterly target →</button>
+              )}
               <EmptyBar />
             </EmptyKpiTile>
             <EmptyKpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
               <KpiLabel icon={<IconCheckCircle />}>Offer acceptance rate</KpiLabel>
-              <EmptyValue>—<span className="text-base font-normal text-gray-400 ml-0.5">%</span></EmptyValue>
+              <EmptyValue>{offerRateValue}<span className="text-base font-normal text-gray-400 ml-0.5">%</span></EmptyValue>
               <EmptyHint>Activates after your first offer</EmptyHint>
               <SparklineOutline stroke="stroke-emerald-300 dark:stroke-emerald-500/30" />
             </EmptyKpiTile>
             <EmptyKpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="rose">
               <KpiLabel icon={<IconShield />}>Inflated profiles surfaced</KpiLabel>
-              <EmptyValue>0</EmptyValue>
+              <EmptyValue>{inflatedValue}</EmptyValue>
               <EmptyHint>Filtering starts on your first submission</EmptyHint>
               <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 leading-tight">Repos built in a single day · résumés that don&apos;t match the work · commit patterns that don&apos;t add up.</p>
             </EmptyKpiTile>
@@ -346,16 +440,16 @@ export default function DashboardPage() {
             <div className="flex items-start justify-between mb-3">
               <div>
                 <KpiLabel icon={<IconStack />}>Shortlist quality rate</KpiLabel>
-                <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">88<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
-                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">7 of 8 selected from your top 10 cleared interview</p>
+                <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{shortlistTop10Pct}<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
+                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">{shortlistHeadlineSub}</p>
               </div>
-              <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">50 shortlisted<br />last 90 days</span>
+              <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">{shortlistCountLabel} shortlisted<br />{shortlistWindowLabel}</span>
             </div>
             <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400 mb-2">Interview-clear rate by shortlist depth</p>
             <ul className="space-y-2.5">
-              {SHORTLIST_TIERS.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
+              {shortlistTiers.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
             </ul>
-            <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">Top 20 clears at 75% vs 88% for the top 10 — the back half dilutes, so your value is the top 10.</p>
+            <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">Top 20 clears at {shortlistTop20Pct}% vs {shortlistTop10Pct}% for the top 10 — the back half dilutes, so your value is the top 10.</p>
           </div>
 
           {/* Plan & usage — REAL entitlement (filled-v2 styling) */}
@@ -445,7 +539,9 @@ function SectionHeader({ eyebrow, title, sub, badge, cta }: { eyebrow: string; t
 }
 
 function ShortlistTierRow({ t }: { t: ShortlistTier }) {
-  const pct = Math.round((t.passed / t.interviewed) * 100);
+  // Guard against an empty funnel (selected = 0) from a real snapshot — the
+  // sample data never hit this, but live tiers can.
+  const pct = t.interviewed > 0 ? Math.round((t.passed / t.interviewed) * 100) : 0;
   return (
     <li className="grid grid-cols-12 items-center gap-3">
       <div className="col-span-4 min-w-0">
