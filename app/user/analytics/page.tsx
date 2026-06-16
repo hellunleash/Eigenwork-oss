@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
+import useSWR from "swr";
 import { auth } from "@/lib/firebase";
+import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { PreviewSidebar } from "../PreviewSidebar";
@@ -45,7 +47,27 @@ type ShortlistTier = { label: string; sub: string; passed: number; interviewed: 
 // hires = ground-truth yield, shown as context.
 type SourceRow = { name: string; submissions: number; top10: number; selected: number; cleared: number; hires: number };
 
-const STAGES: StageDatum[] = [
+// ----- KPI snapshot contract (ADR-009) --------------------------------------
+// Declared LOCALLY (not imported) — this is the shared `kpi_snapshots/{orgId}`
+// contract that `GET /api/kpi` returns as `{ snapshot: KpiSnapshot | null }`.
+// When `snapshot == null` (engine not yet computed for this org) the page falls
+// back to the sample figures below and shows the amber "Sample data" banner.
+type Funnel = { selected: number; cleared: number; rate: number | null };
+type KpiSnapshot = {
+  orgId: string; computedAt: number; windowDays: number; period: string;
+  timeToFill: { medianDays: number | null; hires: number; belowThreshold: boolean };
+  rolesFilled: { hired: number; target: number | null };
+  offerAcceptance: { accepted: number; extended: number; rate: number | null };
+  inflatedProfiles: { count: number };
+  pipelineByStage: { screening: number; interviewing: number; offer: number; hired: number; rejected: number; withdrawn: number; openReqs: number };
+  shortlistQuality: { top10: Funnel; top20: Funnel; ranks11to20: Funnel };
+  sources: Array<{ name: string; submissions: number; top10: number; selected: number; cleared: number; hires: number; top10Penetration: number; clearRate: number | null }>;
+};
+
+// ----- Sample fallback data -------------------------------------------------
+// Verbatim from the v2 preview. Used ONLY when no live snapshot is present; the
+// amber "Sample data" banner is shown in exactly that case.
+const SAMPLE_STAGES: StageDatum[] = [
   { stage: "Sourced",     count: 12, tone: "bg-gray-400 dark:bg-gray-500" },
   { stage: "Screening",   count: 47, tone: "bg-sky-500" },
   { stage: "Interviewing", count: 19, tone: "bg-teal-500" },
@@ -53,19 +75,59 @@ const STAGES: StageDatum[] = [
 ];
 
 // passed = cleared interview, interviewed = selected for interview.
-const SHORTLIST_TIERS: ShortlistTier[] = [
+const SAMPLE_SHORTLIST_TIERS: ShortlistTier[] = [
   { label: "Top 10",      sub: "8 of 10 selected",  passed: 7, interviewed:  8, tone: "bg-teal-500" },
   { label: "Top 20",      sub: "12 of 20 selected", passed: 9, interviewed: 12, tone: "bg-emerald-500" },
   { label: "Ranks 11–20", sub: "4 selected",        passed: 2, interviewed:  4, tone: "bg-amber-500" },
 ];
 
-const SOURCES: SourceRow[] = [
+const SAMPLE_SOURCES: SourceRow[] = [
   { name: "Referrals",                submissions:  41, top10:  9, selected: 7, cleared: 5, hires: 5 },
   { name: "Hacker News Who's Hiring", submissions:  84, top10: 14, selected: 10, cleared: 6, hires: 6 },
   { name: "LinkedIn (organic)",       submissions: 312, top10: 22, selected: 16, cleared: 7, hires: 9 },
   { name: "Company site",             submissions:  67, top10:  5, selected: 3, cleared: 1, hires: 2 },
   { name: "Indeed",                   submissions: 188, top10:  6, selected: 4, cleared: 1, hires: 2 },
 ];
+
+// Stage tones/labels are preserved when mapping a live snapshot's
+// pipelineByStage into the StageBars StageDatum[] shape.
+function snapshotToStages(p: KpiSnapshot["pipelineByStage"]): StageDatum[] {
+  return [
+    { stage: "Screening",    count: p.screening,    tone: "bg-sky-500" },
+    { stage: "Interviewing", count: p.interviewing, tone: "bg-teal-500" },
+    { stage: "Offers",       count: p.offer,        tone: "bg-emerald-500" },
+  ];
+}
+
+// shortlistQuality funnels → the existing ShortlistTier shape
+// (passed = cleared, interviewed = selected). Tones/labels preserved.
+function snapshotToShortlistTiers(q: KpiSnapshot["shortlistQuality"]): ShortlistTier[] {
+  return [
+    { label: "Top 10",      sub: `${q.top10.selected} selected`,      passed: q.top10.cleared,      interviewed: q.top10.selected,      tone: "bg-teal-500" },
+    { label: "Top 20",      sub: `${q.top20.selected} selected`,      passed: q.top20.cleared,      interviewed: q.top20.selected,      tone: "bg-emerald-500" },
+    { label: "Ranks 11–20", sub: `${q.ranks11to20.selected} selected`, passed: q.ranks11to20.cleared, interviewed: q.ranks11to20.selected, tone: "bg-amber-500" },
+  ];
+}
+
+// sources → the existing SourceRow shape (top10Penetration / clearRate are
+// recomputed inside SourceLeaderboard from these raw counts, as today).
+function snapshotToSources(sources: KpiSnapshot["sources"]): SourceRow[] {
+  return sources.map((s) => ({
+    name: s.name,
+    submissions: s.submissions,
+    top10: s.top10,
+    selected: s.selected,
+    cleared: s.cleared,
+    hires: s.hires,
+  }));
+}
+
+const kpiFetcher = async (url: string): Promise<{ snapshot: KpiSnapshot | null }> => {
+  const token = await getIdTokenOrNull();
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+  if (!res.ok) throw new Error("kpi_fetch_failed");
+  return res.json();
+};
 
 // ----- Page -----------------------------------------------------------------
 
@@ -85,6 +147,22 @@ export default function AnalyticsV2Page() {
     return () => unsub();
   }, [router]);
   const { entitlement, isLoading } = useDashboardData(userId);
+
+  // Live KPI snapshot (ADR-009). `{ snapshot: KpiSnapshot | null }`; null until
+  // the KPI engine has computed for this org → fall back to the sample figures.
+  const { data: kpiData } = useSWR<{ snapshot: KpiSnapshot | null }>(
+    userId ? "/api/kpi" : null,
+    kpiFetcher,
+    {
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 2000,
+      refreshInterval: 0,
+      onError: (error) => console.error("Failed to fetch KPI snapshot:", error),
+    }
+  );
+  const snapshot = kpiData?.snapshot ?? null;
+  const usingSample = snapshot == null;
 
   if (authChecking || isLoading) {
     return (
@@ -116,6 +194,33 @@ export default function AnalyticsV2Page() {
       </div>
     );
   }
+
+  // ----- Derived display values: live snapshot, else sample fallback --------
+  // Headline tiles.
+  const timeToFillDays = snapshot && !snapshot.timeToFill.belowThreshold ? snapshot.timeToFill.medianDays : null;
+  const timeToFillDisplay = usingSample ? "18" : (timeToFillDays != null ? String(timeToFillDays) : "—");
+
+  const rolesHired = usingSample ? 12 : (snapshot ? snapshot.rolesFilled.hired : 0);
+  const rolesTarget = usingSample ? 16 : (snapshot ? snapshot.rolesFilled.target : null);
+  const rolesPct = rolesTarget && rolesTarget > 0 ? Math.min(100, Math.round((rolesHired / rolesTarget) * 100)) : null;
+
+  const offerRate = snapshot?.offerAcceptance.rate ?? null;
+  const offerDisplay = usingSample ? "82" : (offerRate != null ? String(Math.round(offerRate)) : "—");
+
+  const inflatedDisplay = usingSample ? "23" : String(snapshot ? snapshot.inflatedProfiles.count : 0);
+
+  // Composite tiles.
+  const stages = usingSample || !snapshot ? SAMPLE_STAGES : snapshotToStages(snapshot.pipelineByStage);
+  const stagesTotal = stages.reduce((s, x) => s + x.count, 0);
+  const openReqs = usingSample ? 4 : (snapshot ? snapshot.pipelineByStage.openReqs : 0);
+
+  const shortlistTiers = usingSample || !snapshot ? SAMPLE_SHORTLIST_TIERS : snapshotToShortlistTiers(snapshot.shortlistQuality);
+  const top10Funnel = snapshot?.shortlistQuality.top10 ?? null;
+  const top10ClearDisplay = usingSample ? "88" : (top10Funnel?.rate != null ? String(Math.round(top10Funnel.rate)) : "—");
+  // Sample preserves its original "50 shortlisted"; live sums the funnels' selected counts.
+  const shortlistTotal = usingSample ? 50 : shortlistTiers.reduce((s, t) => s + t.interviewed, 0);
+
+  const sources = usingSample || !snapshot ? SAMPLE_SOURCES : snapshotToSources(snapshot.sources);
 
   return (
     <div
@@ -156,13 +261,16 @@ export default function AnalyticsV2Page() {
         </div>
       </div>
 
-      {/* Placeholder notice — analytics engine (ADR-009) not built; figures are sample data. */}
-      <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800/50">
-        <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-2.5 flex items-start gap-2 text-xs text-amber-800 dark:text-amber-300">
-          <span className="shrink-0">⚠️</span>
-          <span><span className="font-semibold">Sample data.</span> These analytics are placeholders until the KPI engine ships (ADR-009). The numbers below illustrate the design and are not your live figures.</span>
+      {/* Placeholder notice — shown only while falling back to sample data
+          (no live KPI snapshot yet for this org). Hidden once live figures load. */}
+      {usingSample && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800/50">
+          <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-2.5 flex items-start gap-2 text-xs text-amber-800 dark:text-amber-300">
+            <span className="shrink-0">⚠️</span>
+            <span><span className="font-semibold">Sample data.</span> These analytics are placeholders until the KPI engine ships (ADR-009). The numbers below illustrate the design and are not your live figures.</span>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-8 space-y-10">
         {/* OPERATIONAL — full tile set */}
@@ -178,31 +286,35 @@ export default function AnalyticsV2Page() {
             {/* Row 1 — 4 small tiles */}
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="sky">
               <KpiLabel icon={<IconClock />}>Time-to-fill</KpiLabel>
-              <KpiValue>18<span className="text-base font-normal text-gray-400 ml-1">days</span></KpiValue>
-              <KpiDelta dir="down" good>−4d vs last quarter</KpiDelta>
-              <Sparkline values={[28, 26, 25, 27, 23, 21, 22, 19, 20, 18]} stroke="stroke-sky-500" />
+              <KpiValue>{timeToFillDisplay}<span className="text-base font-normal text-gray-400 ml-1">days</span></KpiValue>
+              {usingSample && <KpiDelta dir="down" good>−4d vs last quarter</KpiDelta>}
+              {usingSample && <Sparkline values={[28, 26, 25, 27, 23, 21, 22, 19, 20, 18]} stroke="stroke-sky-500" />}
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
               <KpiLabel icon={<IconTarget />}>Roles filled vs target</KpiLabel>
-              <KpiValue>12<span className="text-base font-normal text-gray-400 ml-1">/ 16</span></KpiValue>
-              <KpiDelta dir="up" good>75% of Q3 target</KpiDelta>
+              <KpiValue>{rolesHired}<span className="text-base font-normal text-gray-400 ml-1">/ {rolesTarget ?? "—"}</span></KpiValue>
+              {rolesPct != null && <KpiDelta dir="up" good>{rolesPct}% of {snapshot?.period ?? "Q3"} target</KpiDelta>}
               <div className="mt-3 h-1.5 w-full bg-gray-100 dark:bg-white/[0.05] rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: "75%" }} />
+                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${rolesPct ?? 0}%` }} />
               </div>
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
               <KpiLabel icon={<IconCheckCircle />}>Offer acceptance rate</KpiLabel>
-              <KpiValue>82<span className="text-base font-normal text-gray-400 ml-0.5">%</span></KpiValue>
-              <KpiDelta dir="up" good>+6pp vs Q2 · 9 of 11 accepted</KpiDelta>
-              <Sparkline values={[71, 70, 73, 76, 75, 78, 80, 79, 82]} stroke="stroke-emerald-500" />
+              <KpiValue>{offerDisplay}<span className="text-base font-normal text-gray-400 ml-0.5">%</span></KpiValue>
+              {usingSample
+                ? <KpiDelta dir="up" good>+6pp vs Q2 · 9 of 11 accepted</KpiDelta>
+                : snapshot && snapshot.offerAcceptance.extended > 0 && (
+                    <KpiDelta dir="up" good>{snapshot.offerAcceptance.accepted} of {snapshot.offerAcceptance.extended} accepted</KpiDelta>
+                  )}
+              {usingSample && <Sparkline values={[71, 70, 73, 76, 75, 78, 80, 79, 82]} stroke="stroke-emerald-500" />}
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="rose">
               <KpiLabel icon={<IconShield />}>Inflated profiles surfaced</KpiLabel>
-              <KpiValue>23<span className="text-base font-normal text-gray-400 ml-1">this month</span></KpiValue>
-              <KpiDelta dir="up" good>+3 today</KpiDelta>
+              <KpiValue>{inflatedDisplay}<span className="text-base font-normal text-gray-400 ml-1">this month</span></KpiValue>
+              {usingSample && <KpiDelta dir="up" good>+3 today</KpiDelta>}
               <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 leading-tight">Repos built in a single day · résumés that don&apos;t match the work · commit patterns that don&apos;t add up.</p>
             </KpiTile>
 
@@ -211,27 +323,31 @@ export default function AnalyticsV2Page() {
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <KpiLabel icon={<IconFunnel />}>Open reqs · pipeline by stage</KpiLabel>
-                  <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{STAGES.reduce((s, x) => s + x.count, 0)}<span className="text-base font-normal text-gray-400 ml-1.5">candidates across 4 reqs</span></p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{stagesTotal}<span className="text-base font-normal text-gray-400 ml-1.5">candidates across {openReqs} reqs</span></p>
                 </div>
                 <a href="/user/pipelines" className="text-xs font-medium text-sky-600 dark:text-sky-400 hover:underline">All reqs →</a>
               </div>
-              <StageBars stages={STAGES} />
+              <StageBars stages={stages} />
             </KpiTile>
 
             <KpiTile className="col-span-12 lg:col-span-5" accent="emerald" padding="p-5">
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <KpiLabel icon={<IconStack />}>Shortlist quality rate</KpiLabel>
-                  <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">88<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
-                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">7 of 8 selected from your top 10 cleared interview</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{top10ClearDisplay}<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
+                  {usingSample
+                    ? <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">7 of 8 selected from your top 10 cleared interview</p>
+                    : top10Funnel && top10Funnel.selected > 0 && (
+                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">{top10Funnel.cleared} of {top10Funnel.selected} selected from your top 10 cleared interview</p>
+                      )}
                 </div>
-                <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">50 shortlisted<br />last 90 days</span>
+                <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">{shortlistTotal} shortlisted<br />last 90 days</span>
               </div>
               <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400 mb-2">Interview-clear rate by shortlist depth</p>
               <ul className="space-y-2.5">
-                {SHORTLIST_TIERS.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
+                {shortlistTiers.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
               </ul>
-              <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">Top 20 clears at 75% vs 88% for the top 10 — the back half dilutes, so your value is the top 10. Slice this same funnel by source, not depth, and it becomes channel strength.</p>
+              <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">{usingSample ? "Top 20 clears at 75% vs 88% for the top 10 — the back half dilutes, so your value is the top 10. Slice this same funnel by source, not depth, and it becomes channel strength." : "Compare the top-10 clear rate with the top-20: when the back half clears lower, your value is concentrated in the top 10. Slice this same funnel by source, not depth, and it becomes channel strength."}</p>
             </KpiTile>
 
             {/* Row 3 — source leaderboard */}
@@ -245,7 +361,7 @@ export default function AnalyticsV2Page() {
                   <span>Ranked by top-10 reach</span>
                 </div>
               </div>
-              <SourceLeaderboard rows={SOURCES} />
+              <SourceLeaderboard rows={sources} />
             </KpiTile>
           </div>
         </section>
@@ -366,7 +482,9 @@ function Sparkline({ values, stroke }: { values: number[]; stroke: string }) {
 // ----- Stage bars -----------------------------------------------------------
 
 function StageBars({ stages }: { stages: StageDatum[] }) {
-  const max = Math.max(...stages.map((s) => s.count));
+  // `|| 1` guards an all-zero pipeline (a real empty-org snapshot): without it
+  // every `count / max` is 0/0 = NaN, rendering `width: NaN%`.
+  const max = Math.max(...stages.map((s) => s.count)) || 1;
   return (
     <div className="space-y-2.5">
       {stages.map((s, i) => {
@@ -393,7 +511,9 @@ function StageBars({ stages }: { stages: StageDatum[] }) {
 // ----- Shortlist quality band row -------------------------------------------
 
 function ShortlistTierRow({ t }: { t: ShortlistTier }) {
-  const pct = Math.round((t.passed / t.interviewed) * 100);
+  // Guard interviewed === 0 (a live funnel tier with nobody selected): without it
+  // `passed / interviewed` is NaN, rendering "NaN%" and `width: NaN%`.
+  const pct = t.interviewed > 0 ? Math.round((t.passed / t.interviewed) * 100) : 0;
   return (
     <li className="grid grid-cols-12 items-center gap-3">
       <div className="col-span-4 min-w-0">
