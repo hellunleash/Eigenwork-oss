@@ -44,6 +44,7 @@ import {
   FieldValue,
 } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
+import { computeKpiSnapshot } from "@/lib/kpi/compute";
 import { makeOpId } from "@/lib/credit-ledger";
 import { consumeEval } from "@/lib/entitlements";
 import {
@@ -1033,6 +1034,60 @@ async function handleCascadeDelete(req: ExpressRequest, res: ExpressResponse): P
 }
 
 // ---------------------------------------------------------------------------
+// KPI aggregation (ADR-009) — cron-driven Firestore-direct snapshot writer.
+// Cloud Scheduler hits this per the schedule; for each org it computes the 7
+// KPIs and caches them at kpi_snapshots/{orgId} so the dashboard reads ONE doc.
+// ---------------------------------------------------------------------------
+
+async function handleKpiAggregate(req: ExpressRequest, res: ExpressResponse): Promise<void> {
+  const requestId = (req.header("x-request-id") ?? cryptoRandom()) as string;
+  const route = "/worker/kpi-aggregate";
+
+  if (!isWorkerAuthorized(req)) {
+    res.status(403).json({ success: false, error: "forbidden" });
+    return;
+  }
+
+  const ctx: LogContext = { requestId, route };
+  const tTotal = timeMs();
+  const db = getAdminDb();
+
+  try {
+    // Single-org mode (?orgId=) for targeted recompute, else all orgs.
+    const orgIdParam =
+      typeof req.query.orgId === "string" && req.query.orgId.length > 0
+        ? (req.query.orgId as string)
+        : (typeof req.body === "object" && req.body !== null && typeof (req.body as Record<string, unknown>).orgId === "string"
+            ? ((req.body as Record<string, unknown>).orgId as string)
+            : null);
+
+    const orgIds: string[] = orgIdParam
+      ? [orgIdParam]
+      : (await db.collection("orgs").get()).docs.map((d) => d.id);
+
+    let processed = 0;
+    let failed = 0;
+    for (const orgId of orgIds) {
+      try {
+        const snapshot = await computeKpiSnapshot(db, orgId);
+        await db.collection("kpi_snapshots").doc(orgId).set(snapshot);
+        processed += 1;
+      } catch (err) {
+        failed += 1;
+        // One org's failure must not abort the whole sweep.
+        log("error", "kpi.org_aggregate_failed", { ...ctx, orgId }, err);
+      }
+    }
+
+    log("info", "kpi.aggregate_done", { ...ctx, orgs: orgIds.length, processed, failed, ms: tTotal() });
+    res.json({ success: true, processed, ...(failed > 0 && { failed }) });
+  } catch (err) {
+    log("error", "kpi.aggregate_failed", ctx, err);
+    res.status(500).json({ success: false, error: "kpi_aggregate_failed" });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Express bootstrap
 // ---------------------------------------------------------------------------
 
@@ -1070,6 +1125,14 @@ app.post("/worker/evaluate", (req, res) => {
 });
 app.get("/worker/evaluate", (req, res) => {
   void handleWorkerEvaluate(req, res);
+});
+
+// ADR-009 KPI snapshot cron. POST (manual / single-org) + GET (Cloud Scheduler).
+app.post("/worker/kpi-aggregate", (req, res) => {
+  void handleKpiAggregate(req, res);
+});
+app.get("/worker/kpi-aggregate", (req, res) => {
+  void handleKpiAggregate(req, res);
 });
 
 app.post("/match", (req, res) => {
