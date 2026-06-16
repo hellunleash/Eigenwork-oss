@@ -22,6 +22,12 @@ import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { PreviewSidebar } from "../PreviewSidebar";
 
+// Current quarter as a "YYYY-Q[1-4]" period key (matches the org_targets map +
+// the /api/org/targets validation). KPI #2 keys the hiring target off this.
+function currentPeriod(d = new Date()): string {
+  return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+}
+
 const notifySoon = (label: string) =>
   typeof window !== "undefined" && window.alert(`${label} isn’t wired up yet — coming soon.`);
 
@@ -164,6 +170,12 @@ export default function AnalyticsV2Page() {
   const snapshot = kpiData?.snapshot ?? null;
   const usingSample = snapshot == null;
 
+  // KPI #2 hiring-target setter (ADR-009 Phase 5). The canonical target rides on
+  // the snapshot (the engine reads org_targets/{orgId}[period]); `targetOverride`
+  // lets a fresh "Set target" write show immediately, before the next cron recompute.
+  const period = currentPeriod();
+  const [targetOverride, setTargetOverride] = useState<number | null>(null);
+
   if (authChecking || isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white dark:bg-[#0a0a0a]">
@@ -201,8 +213,9 @@ export default function AnalyticsV2Page() {
   const timeToFillDisplay = usingSample ? "18" : (timeToFillDays != null ? String(timeToFillDays) : "—");
 
   const rolesHired = usingSample ? 12 : (snapshot ? snapshot.rolesFilled.hired : 0);
-  const rolesTarget = usingSample ? 16 : (snapshot ? snapshot.rolesFilled.target : null);
-  const rolesPct = rolesTarget && rolesTarget > 0 ? Math.min(100, Math.round((rolesHired / rolesTarget) * 100)) : null;
+  // targetOverride (a just-saved value) wins for immediate feedback; otherwise the
+  // snapshot's target (sample 16 when no live snapshot). RolesFilledTile computes its own %.
+  const rolesTarget = targetOverride ?? (usingSample ? 16 : (snapshot ? snapshot.rolesFilled.target : null));
 
   const offerRate = snapshot?.offerAcceptance.rate ?? null;
   const offerDisplay = usingSample ? "82" : (offerRate != null ? String(Math.round(offerRate)) : "—");
@@ -293,11 +306,7 @@ export default function AnalyticsV2Page() {
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
               <KpiLabel icon={<IconTarget />}>Roles filled vs target</KpiLabel>
-              <KpiValue>{rolesHired}<span className="text-base font-normal text-gray-400 ml-1">/ {rolesTarget ?? "—"}</span></KpiValue>
-              {rolesPct != null && <KpiDelta dir="up" good>{rolesPct}% of {snapshot?.period ?? "Q3"} target</KpiDelta>}
-              <div className="mt-3 h-1.5 w-full bg-gray-100 dark:bg-white/[0.05] rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${rolesPct ?? 0}%` }} />
-              </div>
+              <RolesFilledTile hired={rolesHired} target={rolesTarget} period={period} onTargetSet={setTargetOverride} />
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
@@ -476,6 +485,123 @@ function Sparkline({ values, stroke }: { values: number[]; stroke: string }) {
     <svg viewBox={`0 0 ${w} ${h}`} className="mt-3 w-full h-6" preserveAspectRatio="none" aria-hidden>
       <polyline fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={stroke} points={pts} />
     </svg>
+  );
+}
+
+// ----- Roles filled vs target (KPI #2) --------------------------------------
+
+// When the org has set a target for the current quarter we render the progress
+// number + bar; when it hasn't (`target == null`) we render an inline
+// "Set Q3 target →" CTA that PUTs /api/org/targets and revalidates in place.
+function RolesFilledTile({
+  hired,
+  target,
+  period,
+  onTargetSet,
+}: {
+  hired: number;
+  target: number | null;
+  period: string;
+  onTargetSet: (target: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const quarterLabel = period.split("-")[1] ?? "this quarter"; // e.g. "Q3"
+
+  async function save() {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n <= 0) {
+      setError("Enter a whole number above 0.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const token = await getIdTokenOrNull();
+      if (!token) { setError("Please sign in again."); return; }
+      const res = await fetch("/api/org/targets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ period, target: n }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(data.error === "forbidden" ? "Only an owner or admin can set the target." : "Couldn’t save — try again.");
+        return;
+      }
+      onTargetSet(n);
+      setEditing(false);
+      setValue("");
+    } catch {
+      setError("Couldn’t save — try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Target set → the designed progress number + bar.
+  if (target != null) {
+    const pct = target > 0 ? Math.min(100, Math.round((hired / target) * 100)) : 0;
+    return (
+      <>
+        <KpiValue>{hired}<span className="text-base font-normal text-gray-400 ml-1">/ {target}</span></KpiValue>
+        <KpiDelta dir="up" good>{pct}% of {quarterLabel} target</KpiDelta>
+        <div className="mt-3 h-1.5 w-full bg-gray-100 dark:bg-white/[0.05] rounded-full overflow-hidden">
+          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }} />
+        </div>
+      </>
+    );
+  }
+
+  // No target yet → inline setter.
+  return (
+    <>
+      <KpiValue>{hired}<span className="text-base font-normal text-gray-400 ml-1">hired</span></KpiValue>
+      {editing ? (
+        <div className="mt-2">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={1}
+              step={1}
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { setEditing(false); setError(null); } }}
+              placeholder={`${quarterLabel} target`}
+              className="w-24 px-2 py-1 rounded-md text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.04] border border-gray-200 dark:border-white/[0.1] focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="px-2.5 py-1 rounded-md text-xs font-medium text-white dark:text-gray-900 bg-emerald-600 hover:bg-emerald-500 dark:bg-emerald-400 dark:hover:bg-emerald-300 disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setEditing(false); setError(null); }}
+              className="px-1.5 py-1 rounded-md text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            >
+              Cancel
+            </button>
+          </div>
+          {error && <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{error}</p>}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300"
+        >
+          Set {quarterLabel} target →
+        </button>
+      )}
+    </>
   );
 }
 
