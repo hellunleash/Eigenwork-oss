@@ -157,10 +157,12 @@ async function main() {
 
   // 2. Cached matchResult (what the results page actually serves)
   const cached = jd.matchResult;
-  const cachedIds = cached?.top10 && Array.isArray(cached.top10) ? cached.top10.map((t) => t?.id) : null;
+  // Field renamed top10 → top20 (ADR-009 Unit 4); tolerate legacy docs still on top10.
+  const cachedList = cached?.top20 ?? cached?.top10;
+  const cachedIds = Array.isArray(cachedList) ? cachedList.map((t) => t?.id) : null;
   console.log("\n[2] Cached matchResult (served by the results page)");
   if (cachedIds) {
-    console.log(`${INFO} CACHED: top10 has ${cachedIds.length} ids, completedAt=${cached.completedAt ? "set" : "?"}`);
+    console.log(`${INFO} CACHED: top20 has ${cachedIds.length} ids, completedAt=${cached.completedAt ? "set" : "?"}`);
     console.log(`     The UI returns this cache and will NOT recompute. If it's stale, clear it (apply a new intake / new-intake route deletes matchResult) then re-match.`);
   } else {
     console.log(`${INFO} none — next match computes fresh.`);
@@ -208,7 +210,7 @@ async function main() {
     console.log(`      score=${Number.isFinite(score) ? score : "MISSING"} matchable=${matchable} role-fit=${label}`);
     console.log(`      candidate one-liner: ${oneLiners[i] ? `"${oneLiners[i]}"` : "(EMPTY → auto NO MATCH in real pipeline!)"}`);
     console.log(`      matchData.authRegions: ${authReg === undefined ? "MISSING (legacy/pre-fix)" : JSON.stringify(authReg)} → work-auth ${authOk ? "pass" : "FAIL"}`);
-    if (inCache === false) console.log(`      NOTE: not in cached top10 → won't show in UI until cache is recomputed.`);
+    if (inCache === false) console.log(`      NOTE: not in cached top20 → won't show in UI until cache is recomputed.`);
   });
 
   console.log(`\n${"=".repeat(64)}\nSummary: KEEP ${keep} | dropped — role-fit ${dropRoleFit}, score ${dropScore}, work-auth ${dropAuth}` + (labels ? "" : "  (role-fit not run; no GEMINI_API_KEY)"));
