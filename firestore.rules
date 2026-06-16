@@ -18,7 +18,7 @@ rules_version = '2';
 //   - meant any Google-authenticated user (free signup, takes seconds) could:
 //     * read every candidates/* doc (names, emails, phones, resumePath,
 //       ETI scores, breakdowns) across every customer,
-//     * read every jds/* doc (including cached matchResult.top10 with PII),
+//     * read every jds/* doc (including cached matchResult.top20 with PII),
 //     * read every users/* doc (every founder's credit balance),
 //     * write any doc, including users/{their_uid}.eigenCredits = 999999
 //       for unlimited free credits,

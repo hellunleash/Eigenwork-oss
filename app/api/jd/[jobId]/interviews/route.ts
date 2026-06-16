@@ -8,12 +8,12 @@ import { getRequestId, log } from "@/lib/server-logger";
  *
  * Read-only listing of a role's shortlist with each candidate's CURRENT stage,
  * for the post-screening interview-tracking page. Deliberately lightweight:
- *   - reads the persisted shortlist (jds.matchResult.top10) — NO Gemini match
+ *   - reads the persisted shortlist (jds.matchResult.top20) — NO Gemini match
  *     (unlike GET /api/jd/match, which re-runs the match when uncached);
  *   - batch-reads the live candidate docs only for the stage fields, so the
  *     stage reflects reality after a recruiter has moved someone.
  *
- * Rank is taken from the top10 order (index+1). Owner-guarded via jds.orgId.
+ * Rank is taken from the top20 order (index+1). Owner-guarded via jds.orgId.
  * Enumeration-resistant: non-owner / missing collapses to 404.
  */
 
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
 
-type Top10Entry = {
+type ShortlistEntry = {
   id: string;
   candidateName?: string;
   score?: number;
@@ -62,16 +62,16 @@ export async function GET(req: Request, context: RouteContext) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const matchResult = jd.matchResult as { top10?: unknown[] } | undefined;
-    const top10 = Array.isArray(matchResult?.top10) ? (matchResult.top10 as Top10Entry[]) : [];
+    const matchResult = jd.matchResult as { top20?: unknown[] } | undefined;
+    const shortlist = Array.isArray(matchResult?.top20) ? (matchResult.top20 as ShortlistEntry[]) : [];
 
     // Batch-read the live candidate docs for current stage fields. getAll keeps
-    // this to a single round trip regardless of shortlist size (<= ~10).
-    const refs = top10.map((c) => db.collection("candidates").doc(c.id));
+    // this to a single round trip regardless of shortlist size (<= ~20).
+    const refs = shortlist.map((c) => db.collection("candidates").doc(c.id));
     const liveSnaps = refs.length > 0 ? await db.getAll(...refs) : [];
     const liveById = new Map(liveSnaps.map((s) => [s.id, s.exists ? (s.data() as Record<string, unknown>) : null]));
 
-    const candidates = top10.map((entry, i) => {
+    const candidates = shortlist.map((entry, i) => {
       const live = liveById.get(entry.id) ?? null;
       const stage = (typeof live?.stage === "string" ? live.stage : "screening") as string;
       const flagRaw = (live?.card as { flag?: string | null } | undefined)?.flag ?? entry.card?.flag ?? null;
@@ -94,7 +94,7 @@ export async function GET(req: Request, context: RouteContext) {
       jobId,
       title: typeof jd.title === "string" ? jd.title : "",
       seniority: typeof jd.seniority === "string" ? jd.seniority : "",
-      hasShortlist: top10.length > 0,
+      hasShortlist: shortlist.length > 0,
       // jds.createdAt anchors time-to-fill (ADR-009 #1) on the client.
       createdAt: tsToMs(jd.createdAt),
       candidates,

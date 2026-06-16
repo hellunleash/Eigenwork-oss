@@ -98,12 +98,14 @@ const OUTPUT_TOKENS_FLOOR = 512;
 const CASCADE_DELETE_PARALLELISM = 25;
 
 // Number of candidates returned in the /match response. Tune in product flow.
+// ADR-009 #6 (shortlist-quality) needs depth past 10 — the recruiter must see
+// ranks 11-20 to measure top-10 vs top-20 clear rate — so this is 20.
 // Lazy enrichment downstream scales automatically up to ~50 (the per-candidate
 // Firestore point read is in a Promise.all over this slice). Above ~50, wrap
 // the enrichment loop in runWithConcurrency(top, 25, ...) to cap simultaneous
-// reads. The JSON response key is `top10` regardless of this value for
-// backward compatibility with existing frontend code.
-const TOP_MATCH_COUNT = 10;
+// reads. The JSON response key is `top20` (ADR-009 rename from `top10`).
+// Must match the value in app/api/jd/match/route.ts so Cloud Run + Vercel agree.
+const TOP_MATCH_COUNT = 20;
 
 // ---------------------------------------------------------------------------
 // Auth helpers
@@ -755,7 +757,7 @@ async function runMatch(
   jdId: string,
   requesterUserId: string,
   ctx: LogContext
-): Promise<{ success: boolean; top10?: unknown[]; etiDistribution?: EtiDistribution; seniority?: string; error?: string }> {
+): Promise<{ success: boolean; top20?: unknown[]; etiDistribution?: EtiDistribution; seniority?: string; error?: string }> {
   const tRun = timeMs();
   const db = getAdminDb();
   const snap = await db.collection("jds").doc(jdId).get();
@@ -765,18 +767,25 @@ async function runMatch(
   if (!owner || owner !== requesterUserId) return { success: false, error: "Forbidden" };
 
   // Cached-path read shape matches Vercel runMatch (including fresh resume URL regeneration).
-  const cached = jd.matchResult as { top10?: unknown[] } | undefined;
-  if (cached?.top10 && Array.isArray(cached.top10)) {
+  // ADR-009: the persisted field + response property are `top20` (renamed from
+  // `top10`). Legacy docs that still hold `matchResult.top10` simply miss this
+  // cached-path lookup and self-heal on the next fresh match run — no back-compat.
+  const cached = jd.matchResult as { top20?: unknown[] } | undefined;
+  if (cached?.top20 && Array.isArray(cached.top20)) {
     const poolSnap = await db.collection("candidates").where("matchData.jobId", "==", jdId).get();
     const etiDistribution = buildEtiDistributionFromScores(
       poolSnap.docs.map((d) => Number((d.data() as CandidateDoc).score) || 0)
     );
     const enriched = await Promise.all(
-      (cached.top10 as { id: string; candidateName?: string; email?: string; yoe?: number }[]).map(async (item) => {
+      (cached.top20 as { id: string; candidateName?: string; email?: string; yoe?: number; shortlistRank?: number }[]).map(async (item, i) => {
+        // shortlistRank reflects the rank order (index+1). Prefer the value
+        // persisted on the JD doc, falling back to position for legacy caches.
+        const shortlistRank = typeof item.shortlistRank === "number" ? item.shortlistRank : i + 1;
         try {
           const candSnap = await db.collection("candidates").doc(item.id).get();
-          if (!candSnap.exists) return item;
+          if (!candSnap.exists) return { ...item, shortlistRank };
           const d = candSnap.data();
+          const source = (d?.matchData as { source?: unknown } | undefined)?.source;
           const resumePath = typeof d?.resumePath === "string" ? d.resumePath : null;
           const resumeUrl = await freshResumeUrl(resumePath);
           return {
@@ -785,6 +794,11 @@ async function runMatch(
             email: d?.email ?? item.email ?? "",
             yoe: d?.yoe ?? item.yoe,
             resume_url: resumeUrl,
+            // ADR-009: rank-stratification + source attribution for the
+            // shortlist-quality / channel-strength funnels. Conditional spread
+            // on source so missing values never write/serialize undefined.
+            shortlistRank,
+            ...(source != null && { source }),
             // ADR-007 result card fields. Pulled from the full doc so the
             // existing match cache (predating this ADR) gets the new fields
             // on first cached-path read instead of waiting for a fresh match.
@@ -793,11 +807,11 @@ async function runMatch(
             ...(d?.work_history != null && { work_history: d.work_history }),
           };
         } catch {
-          return item;
+          return { ...item, shortlistRank };
         }
       })
     );
-    return { success: true, top10: enriched, etiDistribution, seniority: String(jd.seniority ?? "") };
+    return { success: true, top20: enriched, etiDistribution, seniority: String(jd.seniority ?? "") };
   }
 
   const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
@@ -839,12 +853,15 @@ async function runMatch(
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   const top = list.slice(0, TOP_MATCH_COUNT);
 
-  // Re-fetch FULL docs for the top 10 only. The minimal scan above didn't
+  // Re-fetch FULL docs for the top 20 only. The minimal scan above didn't
   // include candidateName, email, full profile (ramp/supervision/risk_flags),
   // full matchData (workTypes/locations), or resumePath.
   // Single batched fetch, bounded at ~200ms.
-  const top10 = await Promise.all(
-    top.map(async (c) => {
+  // ADR-009: shortlistRank (index+1, 1-20) + matchData.source enrich each
+  // entry, powering the shortlist-quality (#6) + channel-strength (#7) funnels.
+  const top20 = await Promise.all(
+    top.map(async (c, i) => {
+      const shortlistRank = i + 1;
       try {
         const fullSnap = await db.collection("candidates").doc(c.id).get();
         if (!fullSnap.exists) {
@@ -859,9 +876,11 @@ async function runMatch(
             email: "",
             matchData: c.matchData,
             resume_url: null,
+            shortlistRank,
           };
         }
         const full = (fullSnap.data() ?? {}) as Record<string, unknown>;
+        const source = (full.matchData as { source?: unknown } | undefined)?.source;
         const resumePath = typeof full.resumePath === "string" ? full.resumePath : null;
         const resumeUrl = await freshResumeUrl(resumePath);
         const profileObj = full.profile as { role_fit?: unknown; [k: string]: unknown } | undefined;
@@ -875,6 +894,10 @@ async function runMatch(
           email: typeof full.email === "string" ? full.email : "",
           matchData: full.matchData ?? c.matchData,
           resume_url: resumeUrl,
+          // ADR-009: rank-stratification + source attribution. Conditional
+          // spread on source so a missing value never serializes undefined.
+          shortlistRank,
+          ...(source != null && { source }),
           // ADR-007 result card fields. Conditionally spread so missing
           // fields don't pollute the JSON with explicit undefineds.
           ...(full.card != null && { card: full.card }),
@@ -882,7 +905,7 @@ async function runMatch(
           ...(full.work_history != null && { work_history: full.work_history }),
         };
       } catch (err) {
-        log("warn", "match.top10_enrich_failed", { ...ctx, candidateId: c.id }, err);
+        log("warn", "match.top20_enrich_failed", { ...ctx, candidateId: c.id }, err);
         return {
           id: c.id,
           score: c.score,
@@ -893,19 +916,41 @@ async function runMatch(
           candidateName: "",
           email: "",
           resume_url: null,
+          shortlistRank,
         };
       }
     })
   );
 
-  const top10Persisted = top10.map(({ resume_url: _omit, ...rest }) => {
+  // ADR-009: freeze shortlistRank onto each candidate doc so the analytics
+  // funnel keeps the rank even after the candidate leaves the shortlist view.
+  // Batched to one round trip; fire-and-forget so a write failure never fails
+  // the match. Uses set+merge (not update): a candidate can be deleted between
+  // the scan and this write, and batch.update on a missing doc rejects the
+  // ENTIRE atomic batch — set+merge is the create-or-update that never throws,
+  // so one stale entry can't drop every other candidate's rank.
+  try {
+    const rankBatch = db.batch();
+    top20.forEach((entry) => {
+      rankBatch.set(
+        db.collection("candidates").doc(entry.id),
+        { shortlistRank: entry.shortlistRank },
+        { merge: true }
+      );
+    });
+    await rankBatch.commit();
+  } catch (rankErr) {
+    log("warn", "match.shortlist_rank_write_failed", { ...ctx, jdId }, rankErr);
+  }
+
+  const top20Persisted = top20.map(({ resume_url: _omit, ...rest }) => {
     void _omit;
     return rest;
   });
 
   try {
     await db.collection("jds").doc(jdId).update({
-      matchResult: { top10: top10Persisted, completedAt: FieldValue.serverTimestamp() },
+      matchResult: { top20: top20Persisted, completedAt: FieldValue.serverTimestamp() },
     });
   } catch (writeErr) {
     log("warn", "match.result_cache_write_failed", { ...ctx, jdId }, writeErr);
@@ -917,11 +962,11 @@ async function runMatch(
     poolSize: roleFitResults.length,
     matchOrAdjacent: roleFitResults.filter((r) => r === "MATCH" || r === "ADJACENT").length,
     afterFilters: list.length,
-    top10Count: top10.length,
+    top20Count: top20.length,
     latencyMs: tRun(),
   });
 
-  return { success: true, top10, etiDistribution, seniority: String(jd.seniority ?? "") };
+  return { success: true, top20, etiDistribution, seniority: String(jd.seniority ?? "") };
 }
 
 async function handleMatch(req: ExpressRequest, res: ExpressResponse): Promise<void> {
@@ -957,7 +1002,7 @@ async function handleMatch(req: ExpressRequest, res: ExpressResponse): Promise<v
     }
     res.json({
       success: true,
-      top10: result.top10 ?? [],
+      top20: result.top20 ?? [],
       etiDistribution: result.etiDistribution ?? buildEtiDistributionFromScores([]),
       seniority: result.seniority ?? "",
     });

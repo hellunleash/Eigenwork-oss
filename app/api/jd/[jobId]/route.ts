@@ -18,7 +18,7 @@ type RouteContext = { params: Promise<{ jobId: string }> };
  * a strict whitelist of fields safe to show on a public intake form. In
  * particular this MUST NOT return:
  *   - userId (owner identity)
- *   - matchResult / matchResult.top10 (the employer's ranked candidate
+ *   - matchResult / matchResult.top20 (the employer's ranked candidate
  *     shortlist, including names, emails, phones, resume URLs)
  *   - any other internal field added to the JD doc in the future
  *

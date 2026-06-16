@@ -358,7 +358,7 @@ function JDResultsContent() {
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
 
-  const { top10, etiDistribution, isLoading, error, revalidate } = useResultsData(jobId);
+  const { top20, etiDistribution, isLoading, error, revalidate } = useResultsData(jobId);
 
   const [navCollapsed, setNavCollapsed] = useState(false);
 
@@ -429,8 +429,8 @@ function JDResultsContent() {
       return next;
     });
   }, []);
-  const allSelected = top10.length > 0 && top10.every((c) => selected.has(c.id));
-  const toggleAll = () => setSelected((s) => (s.size === top10.length ? new Set() : new Set(top10.map((c) => c.id))));
+  const allSelected = top20.length > 0 && top20.every((c) => selected.has(c.id));
+  const toggleAll = () => setSelected((s) => (s.size === top20.length ? new Set() : new Set(top20.map((c) => c.id))));
 
   const bulkMove = async (stage: Stage) => {
     const ids = [...selected];
@@ -451,7 +451,7 @@ function JDResultsContent() {
 
   const exportCsv = () => {
     const headers = ["Rank", "Name", "Email", "ETI Score", "Location", "Work Types", "Work Auth", "Title", "Edge", "Flag", "Role Fit"];
-    const rows = top10.map((c, i) => {
+    const rows = top20.map((c, i) => {
       const wt = c.matchData?.workTypes;
       const workTypes = Array.isArray(wt) ? wt.join("; ") : wt != null ? String(wt) : "";
       return [
@@ -508,7 +508,7 @@ function JDResultsContent() {
         </button>
       </div>
     );
-  } else if (top10.length === 0 && etiDistribution.total === 0) {
+  } else if (top20.length === 0 && etiDistribution.total === 0) {
     body = (
       <div className="py-20 text-center">
         <p className="text-gray-600 dark:text-gray-400 text-sm">No applicants in the pool for this job yet.</p>
@@ -518,7 +518,7 @@ function JDResultsContent() {
     body = (
       <>
         <EtiPoolDistributionBar distribution={etiDistribution} />
-        {top10.length === 0 ? (
+        {top20.length === 0 ? (
           <p className="text-gray-600 dark:text-gray-400 text-sm text-center py-4">
             No matching candidates passed the filters (role fit, ETI ≥ 50, and work authorization).
           </p>
@@ -546,10 +546,10 @@ function JDResultsContent() {
                 />
                 Select all
               </label>
-              <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">{top10.length} candidate{top10.length === 1 ? "" : "s"}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">{top20.length} candidate{top20.length === 1 ? "" : "s"}</span>
             </div>
             <ul className="space-y-3">
-              {top10.map((c) => {
+              {top20.map((c) => {
                 const location = (c.matchData?.locations ?? []).join(", ");
                 const workTypesRaw = c.matchData?.workTypes;
                 const workTypes = Array.isArray(workTypesRaw) ? workTypesRaw.join(", ") : (workTypesRaw ? String(workTypesRaw) : "");
@@ -714,7 +714,7 @@ function JDResultsContent() {
   const subtitle =
     !jobId || isLoading || error
       ? "Top candidates for this role"
-      : `${top10.length} candidate${top10.length === 1 ? "" : "s"} · ${counts.shortlisted} shortlisted · ${counts.removed} removed`;
+      : `${top20.length} candidate${top20.length === 1 ? "" : "s"} · ${counts.shortlisted} shortlisted · ${counts.removed} removed`;
 
   return (
     <div
@@ -745,7 +745,7 @@ function JDResultsContent() {
                 </div>
               )}
             </div>
-            {top10.length > 0 && (
+            {top20.length > 0 && (
               <button
                 type="button"
                 onClick={exportCsv}
