@@ -28,8 +28,15 @@ function currentPeriod(d = new Date()): string {
   return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
 }
 
-const notifySoon = (label: string) =>
-  typeof window !== "undefined" && window.alert(`${label} isn’t wired up yet — coming soon.`);
+// "updated 7m ago" style label from a snapshot's computedAt (epoch ms).
+function agoLabel(ms: number): string {
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "updated just now";
+  if (m < 60) return `updated ${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `updated ${h}h ago`;
+  return `updated ${Math.round(h / 24)}d ago`;
+}
 
 // ----- Types & seed data ----------------------------------------------------
 
@@ -68,6 +75,7 @@ type KpiSnapshot = {
   pipelineByStage: { screening: number; interviewing: number; offer: number; hired: number; rejected: number; withdrawn: number; openReqs: number };
   shortlistQuality: { top10: Funnel; top20: Funnel; ranks11to20: Funnel };
   sources: Array<{ name: string; submissions: number; top10: number; selected: number; cleared: number; hires: number; top10Penetration: number; clearRate: number | null }>;
+  history?: Array<{ at: number; timeToFill: number | null; offerRate: number | null }>;
 };
 
 // ----- Sample fallback data -------------------------------------------------
@@ -235,6 +243,11 @@ export default function AnalyticsV2Page() {
 
   const sources = usingSample || !snapshot ? SAMPLE_SOURCES : snapshotToSources(snapshot.sources);
 
+  // Headline trend sparklines draw from the snapshot's rolling history (live only);
+  // null points (no data that run) are dropped, and a line needs >= 2 points.
+  const timeToFillTrend = (snapshot?.history ?? []).map((h) => h.timeToFill).filter((v): v is number => v != null);
+  const offerTrend = (snapshot?.history ?? []).map((h) => h.offerRate).filter((v): v is number => v != null);
+
   return (
     <div
       className={`min-h-screen bg-white dark:bg-[#0a0a0a] transition-[padding] duration-300 ${
@@ -253,7 +266,7 @@ export default function AnalyticsV2Page() {
                 Acme Talent · Team workspace
               </span>
               <span className="text-gray-300 dark:text-white/15">·</span>
-              <span>Q3 2026 · Updated just now</span>
+              <span>{usingSample || !snapshot ? "Sample data" : `${snapshot.period} · ${agoLabel(snapshot.computedAt)}`}</span>
             </div>
             <div className="mt-1.5 flex items-center gap-2">
               <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">Analytics</h1>
@@ -262,11 +275,8 @@ export default function AnalyticsV2Page() {
             <p className="text-sm text-gray-500 dark:text-gray-400">Every hiring metric your team runs on. Available on Team plan and above.</p>
           </div>
           <div className="flex items-center gap-2">
-            <div className="hidden md:flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-white/[0.04] rounded-md">
-              {["7d", "30d", "Quarter", "YTD"].map((r, i) => (
-                <button key={r} type="button" onClick={() => notifySoon("Date range")} className={`px-2.5 py-1 rounded text-xs font-medium ${i === 2 ? "bg-white dark:bg-white/[0.08] text-gray-900 dark:text-gray-100 shadow-sm" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}>{r}</button>
-              ))}
-            </div>
+            {/* Date-range toggle removed — the engine computes a fixed current-quarter /
+                90-day window, so a non-functional selector would only mislead. */}
             <a href="/user/dashboard" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/[0.08] hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors">
               ← Dashboard
             </a>
@@ -301,7 +311,9 @@ export default function AnalyticsV2Page() {
               <KpiLabel icon={<IconClock />}>Time-to-fill</KpiLabel>
               <KpiValue>{timeToFillDisplay}<span className="text-base font-normal text-gray-400 ml-1">days</span></KpiValue>
               {usingSample && <KpiDelta dir="down" good>−4d vs last quarter</KpiDelta>}
-              {usingSample && <Sparkline values={[28, 26, 25, 27, 23, 21, 22, 19, 20, 18]} stroke="stroke-sky-500" />}
+              {usingSample
+                ? <Sparkline values={[28, 26, 25, 27, 23, 21, 22, 19, 20, 18]} stroke="stroke-sky-500" />
+                : timeToFillTrend.length >= 2 && <Sparkline values={timeToFillTrend} stroke="stroke-sky-500" />}
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="emerald">
@@ -317,7 +329,9 @@ export default function AnalyticsV2Page() {
                 : snapshot && snapshot.offerAcceptance.extended > 0 && (
                     <KpiDelta dir="up" good>{snapshot.offerAcceptance.accepted} of {snapshot.offerAcceptance.extended} accepted</KpiDelta>
                   )}
-              {usingSample && <Sparkline values={[71, 70, 73, 76, 75, 78, 80, 79, 82]} stroke="stroke-emerald-500" />}
+              {usingSample
+                ? <Sparkline values={[71, 70, 73, 76, 75, 78, 80, 79, 82]} stroke="stroke-emerald-500" />
+                : offerTrend.length >= 2 && <Sparkline values={offerTrend} stroke="stroke-emerald-500" />}
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="rose">

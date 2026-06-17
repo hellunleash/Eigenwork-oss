@@ -15,6 +15,18 @@ export type Funnel = {
   rate: number | null;
 };
 
+/**
+ * One point in the rolling trend history (for the headline sparklines). The
+ * KPI snapshot stores only current values, so the cron appends one point per run
+ * (capped to the last ~24) — that's the time-series the sparklines draw from.
+ * Values are null when there's no data that run (e.g. no hires → no time-to-fill).
+ */
+export type KpiTrendPoint = {
+  at: number; // epoch ms (the run's computedAt)
+  timeToFill: number | null; // median days
+  offerRate: number | null; // %
+};
+
 /** Per-source channel-strength row for the source leaderboard (KPI #7). */
 export type KpiSource = {
   name: string;
@@ -71,6 +83,10 @@ export type KpiSnapshot = {
 
   // #7 Channel strength — same funnel, sliced by candidate source.
   sources: KpiSource[];
+
+  // Rolling trend history for the headline sparklines (oldest → newest, last ~24
+  // runs). Appended by the cron each run; empty until it has run at least once.
+  history: KpiTrendPoint[];
 };
 
 /** Firestore doc path for an org's cached KPI snapshot. */

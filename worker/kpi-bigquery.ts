@@ -296,6 +296,9 @@ function buildSnapshot(
     pipelineByStage,
     shortlistQuality,
     sources,
+    // Trend history is appended by the cron (handleKpiAggregate) from the
+    // previous snapshot — buildSnapshot is pure and has no Firestore access.
+    history: [],
   };
 }
 

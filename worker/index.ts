@@ -45,7 +45,7 @@ import {
 } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
 import { computeKpiSnapshotBQ, computeAllOrgSnapshots } from "./kpi-bigquery";
-import type { KpiSnapshot } from "@/lib/kpi/types";
+import type { KpiSnapshot, KpiTrendPoint } from "@/lib/kpi/types";
 import { makeOpId } from "@/lib/credit-ledger";
 import { consumeEval } from "@/lib/entitlements";
 import {
@@ -1129,10 +1129,24 @@ async function handleKpiAggregate(req: ExpressRequest, res: ExpressResponse): Pr
       ? [await computeKpiSnapshotBQ(orgIdParam, orgTargetsByOrg.get(orgIdParam) ?? null)]
       : await computeAllOrgSnapshots(orgIds, orgTargetsByOrg);
 
+    const MAX_HISTORY = 24; // rolling trend window for the headline sparklines.
     let processed = 0;
     let failed = 0;
     for (const snapshot of snapshots) {
       try {
+        // Append this run's headline values to the org's rolling trend history
+        // (read the previous snapshot's history, append, cap). One tiny extra
+        // read per org; this is the time-series the dashboard sparklines draw.
+        const prev = await db.collection("kpi_snapshots").doc(snapshot.orgId).get();
+        const prevHistory = Array.isArray(prev.data()?.history)
+          ? (prev.data()!.history as KpiTrendPoint[])
+          : [];
+        const point: KpiTrendPoint = {
+          at: snapshot.computedAt,
+          timeToFill: snapshot.timeToFill.medianDays,
+          offerRate: snapshot.offerAcceptance.rate,
+        };
+        snapshot.history = [...prevHistory, point].slice(-MAX_HISTORY);
         await db.collection("kpi_snapshots").doc(snapshot.orgId).set(snapshot);
         processed += 1;
       } catch (err) {
