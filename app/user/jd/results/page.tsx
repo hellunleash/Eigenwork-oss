@@ -344,6 +344,51 @@ function ResultActionRow({
   );
 }
 
+// KPI #4 review control. The engine only *flags* possible inflation (the red
+// box above); "Inflated profiles found" counts only the ones a recruiter
+// confirms here. Shown under the flag; persisted via PATCH inflation-review.
+type ReviewState = "confirmed" | "cleared" | null;
+function InflationReviewRow({
+  review,
+  saving,
+  onSet,
+}: {
+  review: ReviewState;
+  saving: boolean;
+  onSet: (review: ReviewState) => void;
+}) {
+  return (
+    <div className={`mt-2 flex flex-wrap items-center gap-2 ${saving ? "opacity-60 pointer-events-none" : ""}`}>
+      {review === null && (
+        <>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Is this profile actually inflated?</span>
+          <div className="flex flex-wrap items-center gap-1.5 ml-auto">
+            <ActBtn tone="danger" label="Confirm inflated" onClick={() => onSet("confirmed")} />
+            <ActBtn tone="muted" label="Looks fine" onClick={() => onSet("cleared")} />
+          </div>
+        </>
+      )}
+      {review === "confirmed" && (
+        <>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M5 13l4 4L19 7" /></svg>
+            Confirmed inflated
+          </span>
+          <div className="ml-auto"><ActBtn tone="muted" label="Undo" onClick={() => onSet(null)} /></div>
+        </>
+      )}
+      {review === "cleared" && (
+        <>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-600 dark:bg-white/[0.05] dark:text-gray-300">
+            Marked as real
+          </span>
+          <div className="ml-auto"><ActBtn tone="muted" label="Undo" onClick={() => onSet(null)} /></div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function csvCell(value: unknown): string {
   const s = value == null ? "" : String(value);
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -412,6 +457,31 @@ function JDResultsContent() {
       setSaving((s) => { const n = new Set(s); n.delete(id); return n; });
     }
   }, [stageMap]);
+
+  // KPI #4 inflation review (confirm/clear the flag). Optimistic, mirrors move().
+  // reviewMap holds local overrides keyed by id; absence means "use the server
+  // value off the candidate doc". `prev` is the displayed value before the
+  // change, so a failed save reverts to exactly what the user saw.
+  const [reviewMap, setReviewMap] = useState<Record<string, ReviewState>>({});
+  const [reviewSaving, setReviewSaving] = useState<Set<string>>(new Set());
+  const setReview = useCallback(async (id: string, review: ReviewState, prev: ReviewState) => {
+    setReviewMap((m) => ({ ...m, [id]: review }));
+    setReviewSaving((s) => new Set(s).add(id));
+    try {
+      const token = await getIdTokenOrNull();
+      const res = await fetch(`/api/candidate/${encodeURIComponent(id)}/inflation-review`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ review }),
+      });
+      if (!res.ok) throw new Error("save_failed");
+    } catch {
+      setReviewMap((m) => ({ ...m, [id]: prev }));
+      if (typeof window !== "undefined") window.alert("Could not save the review. Please try again.");
+    } finally {
+      setReviewSaving((s) => { const n = new Set(s); n.delete(id); return n; });
+    }
+  }, []);
 
   const counts = useMemo(() => {
     let shortlisted = 0, removed = 0;
@@ -569,6 +639,8 @@ function JDResultsContent() {
                 const title = (c.card?.title ?? rfObj?.title ?? "Candidate").trim() || "Candidate";
                 const edge = (c.card?.edge ?? "").trim();
                 const flag = c.card?.flag?.trim() || null;
+                // KPI #4: local override wins, else the server value off the doc.
+                const reviewState: ReviewState = c.id in reviewMap ? reviewMap[c.id] : (c.inflationReview ?? null);
                 const isExpanded = expandedIds.has(c.id);
                 const hasSignals = !!c.github_metrics || (c.work_history && c.work_history.length > 0) || c.work_history?.length === 0;
                 const isSelected = selected.has(c.id);
@@ -629,6 +701,13 @@ function JDResultsContent() {
                           </svg>
                           <span>{flag}</span>
                         </div>
+                      )}
+                      {flag && (
+                        <InflationReviewRow
+                          review={reviewState}
+                          saving={reviewSaving.has(c.id)}
+                          onSet={(r) => setReview(c.id, r, reviewState)}
+                        />
                       )}
                       {evidenceUnavailable && !flag && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">

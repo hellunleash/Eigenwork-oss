@@ -263,7 +263,7 @@ export default function AnalyticsV2Page() {
             <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 font-medium tracking-wide">
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                Acme Talent · Team workspace
+                Team workspace
               </span>
               <span className="text-gray-300 dark:text-white/15">·</span>
               <span>{usingSample || !snapshot ? "Sample data" : `${snapshot.period} · ${agoLabel(snapshot.computedAt)}`}</span>
@@ -301,7 +301,6 @@ export default function AnalyticsV2Page() {
           <SectionHeader
             eyebrow="Operational performance"
             title="Hiring performance this quarter"
-            sub="The operational metrics your TA team runs on."
             badge={{ text: "Team plan", tone: "team" }}
           />
 
@@ -335,10 +334,9 @@ export default function AnalyticsV2Page() {
             </KpiTile>
 
             <KpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="rose">
-              <KpiLabel icon={<IconShield />}>Inflated profiles surfaced</KpiLabel>
+              <KpiLabel icon={<IconShield />}>Inflated profiles found</KpiLabel>
               <KpiValue>{inflatedDisplay}<span className="text-base font-normal text-gray-400 ml-1">this month</span></KpiValue>
               {usingSample && <KpiDelta dir="up" good>+3 today</KpiDelta>}
-              <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 leading-tight">Repos built in a single day · résumés that don&apos;t match the work · commit patterns that don&apos;t add up.</p>
             </KpiTile>
 
             {/* Row 2 — wider tiles */}
@@ -405,7 +403,7 @@ function SectionHeader({
 }: {
   eyebrow: string;
   title: string;
-  sub: string;
+  sub?: string;
   badge?: { text: string; tone: "team" | "outcomes" };
   cta?: { label: string; href: string };
 }) {
@@ -420,7 +418,7 @@ function SectionHeader({
           {badge && <span className={`px-2 py-0.5 rounded text-[10.5px] font-semibold tracking-wide ${badgeClass}`}>{badge.text}</span>}
         </div>
         <h2 className="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-50 tracking-tight">{title}</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400">{sub}</p>
+        {sub && <p className="text-sm text-gray-500 dark:text-gray-400">{sub}</p>}
       </div>
       {cta && (
         <a href={cta.href} className="text-sm font-medium text-sky-600 dark:text-sky-400 hover:underline inline-flex items-center gap-1">

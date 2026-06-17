@@ -46,8 +46,7 @@ function tbl(name: string): string {
 type JdRow = { org_id: string | null; is_closed: boolean; created_ms: number | null; hired_ms: number | null };
 type CandRow = {
   org_id: string | null;
-  fraud_risk: number | null;
-  overlord_verdict: string | null;
+  inflation_review: string | null;
   stage: string | null;
   shortlist_rank: number | null;
   selected_for_interview: boolean;
@@ -99,10 +98,6 @@ function monthBounds(d: Date): { start: number; end: number } {
     end: new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(),
   };
 }
-function isInflatedOrSuspicious(verdict: string | null, fraudRisk: number | null): boolean {
-  if (verdict === "suspicious" || verdict === "inflated") return true;
-  return fraudRisk != null && fraudRisk >= 0.4;
-}
 function funnelOf(cands: CandRow[]): Funnel {
   let selected = 0;
   let cleared = 0;
@@ -125,8 +120,7 @@ function mapJdRow(r: Record<string, unknown>): JdRow {
 function mapCandRow(r: Record<string, unknown>): CandRow {
   return {
     org_id: str(r.org_id),
-    fraud_risk: asNum(r.fraud_risk),
-    overlord_verdict: str(r.overlord_verdict),
+    inflation_review: str(r.inflation_review),
     stage: str(r.stage),
     shortlist_rank: asNum(r.shortlist_rank),
     selected_for_interview: r.selected_for_interview === true,
@@ -150,7 +144,7 @@ function jdQuery(whereOrg: boolean): string {
 }
 function candQuery(whereOrg: boolean): string {
   return (
-    `SELECT j.org_id AS org_id, SAFE_CAST(c.fraud_risk AS FLOAT64) AS fraud_risk, c.overlord_verdict, c.stage, ` +
+    `SELECT j.org_id AS org_id, c.inflation_review, c.stage, ` +
     `c.shortlist_rank, c.selected_for_interview, c.interview_outcome, c.source, ` +
     `UNIX_MILLIS(c.offer_extended_at) AS offer_extended_ms, ` +
     `UNIX_MILLIS(c.offer_accepted_at) AS offer_accepted_ms, ` +
@@ -218,11 +212,15 @@ function buildSnapshot(
     rate: rateOrNull(offersAccepted, offersExtended),
   };
 
-  // #4 Inflated profiles surfaced — flagged candidates THIS CALENDAR MONTH.
+  // #4 Inflated profiles FOUND — recruiter-CONFIRMED inflation among candidates
+  // submitted THIS CALENDAR MONTH. The engine only *flags* (overlord verdict →
+  // card.flag); inflationReview === 'confirmed' is the human verdict written by
+  // PATCH /api/candidate/[id]/inflation-review. An auto-flag alone never counts,
+  // so a false positive can't silently inflate the number.
   let inflatedCount = 0;
   for (const c of cands) {
     if (c.submitted_ms == null || c.submitted_ms < month.start || c.submitted_ms >= month.end) continue;
-    if (isInflatedOrSuspicious(c.overlord_verdict, c.fraud_risk)) inflatedCount += 1;
+    if (c.inflation_review === "confirmed") inflatedCount += 1;
   }
   const inflatedProfiles = { count: inflatedCount };
 

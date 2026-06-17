@@ -588,6 +588,9 @@ async function runMatch(
             ...(d?.card != null && { card: d.card }),
             ...(d?.github_metrics != null && { github_metrics: d.github_metrics }),
             ...(d?.work_history != null && { work_history: d.work_history }),
+            // KPI #4 review state so the results page shows the recruiter's
+            // confirm/clear decision (and lets them change it).
+            ...(d?.inflationReview != null && { inflationReview: d.inflationReview }),
           };
         } catch {
           return { ...item, shortlistRank };
@@ -695,6 +698,8 @@ async function runMatch(
           ...(full.card != null && { card: full.card }),
           ...(full.github_metrics != null && { github_metrics: full.github_metrics }),
           ...(full.work_history != null && { work_history: full.work_history }),
+          // KPI #4 review state (recruiter confirm/clear of the inflation flag).
+          ...(full.inflationReview != null && { inflationReview: full.inflationReview }),
         };
       } catch (err) {
         log("warn", "match.top20_enrich_failed", { ...ctx, candidateId: c.id }, err);

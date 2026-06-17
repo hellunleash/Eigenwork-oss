@@ -64,7 +64,9 @@ export type KpiSnapshot = {
   // #3 Offer acceptance — accepted / (offers extended > 14 days ago).
   offerAcceptance: { accepted: number; extended: number; rate: number | null };
 
-  // #4 Inflated profiles surfaced — fraud/AI flag count this calendar month.
+  // #4 Inflated profiles found — recruiter-CONFIRMED inflation (inflationReview
+  // === 'confirmed') among candidates submitted this calendar month. Auto-flags
+  // alone never count; a human confirms via PATCH /candidate/[id]/inflation-review.
   inflatedProfiles: { count: number };
 
   // #5 Open reqs · pipeline by stage — stage counts across OPEN reqs.

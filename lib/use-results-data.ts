@@ -79,6 +79,10 @@ export type Candidate = {
   // attributed source. Present on entries from the top-20 match response.
   shortlistRank?: number;
   source?: string | null;
+  // KPI #4 human-in-the-loop review of the inflation flag. Absent = un-reviewed;
+  // only "confirmed" counts toward "Inflated profiles found". Written by
+  // PATCH /api/candidate/[id]/inflation-review, surfaced by the match endpoints.
+  inflationReview?: "confirmed" | "cleared";
 };
 
 type MatchResultsResponse = {

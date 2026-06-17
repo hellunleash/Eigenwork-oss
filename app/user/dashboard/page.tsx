@@ -345,10 +345,9 @@ export default function DashboardPage() {
               <SparklineOutline stroke="stroke-emerald-300 dark:stroke-emerald-500/30" />
             </EmptyKpiTile>
             <EmptyKpiTile className="col-span-12 sm:col-span-6 lg:col-span-3" accent="rose">
-              <KpiLabel icon={<IconShield />}>Inflated profiles surfaced</KpiLabel>
+              <KpiLabel icon={<IconShield />}>Inflated profiles found</KpiLabel>
               <EmptyValue>{inflatedValue}</EmptyValue>
               <EmptyHint>Filtering starts on your first submission</EmptyHint>
-              <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 leading-tight">Repos built in a single day · résumés that don&apos;t match the work · commit patterns that don&apos;t add up.</p>
             </EmptyKpiTile>
           </div>
         </section>
