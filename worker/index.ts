@@ -44,7 +44,8 @@ import {
   FieldValue,
 } from "@/lib/firebase-admin";
 import { runEvaluation } from "@/lib/evaluation-runner";
-import { computeKpiSnapshotBQ } from "./kpi-bigquery";
+import { computeKpiSnapshotBQ, computeAllOrgSnapshots } from "./kpi-bigquery";
+import type { KpiSnapshot } from "@/lib/kpi/types";
 import { makeOpId } from "@/lib/credit-ledger";
 import { consumeEval } from "@/lib/entitlements";
 import {
@@ -1112,21 +1113,32 @@ async function handleKpiAggregate(req: ExpressRequest, res: ExpressResponse): Pr
       ? [orgIdParam]
       : (await db.collection("orgs").get()).docs.map((d) => d.id);
 
+    // org_targets isn't mirrored to BigQuery — read each org's targets doc from
+    // Firestore (tiny) and pass the map into the aggregator.
+    const orgTargetsByOrg = new Map<string, Record<string, unknown> | null>();
+    await Promise.all(
+      orgIds.map(async (id) => {
+        const t = await db.collection("org_targets").doc(id).get();
+        orgTargetsByOrg.set(id, t.exists ? (t.data() as Record<string, unknown>) : null);
+      })
+    );
+
+    // BATCHED: two BigQuery queries total for ALL orgs (the changelog is scanned
+    // once per run, grouped by org in memory) — avoids the per-org N² scan.
+    const snapshots: KpiSnapshot[] = orgIdParam
+      ? [await computeKpiSnapshotBQ(orgIdParam, orgTargetsByOrg.get(orgIdParam) ?? null)]
+      : await computeAllOrgSnapshots(orgIds, orgTargetsByOrg);
+
     let processed = 0;
     let failed = 0;
-    for (const orgId of orgIds) {
+    for (const snapshot of snapshots) {
       try {
-        // org_targets isn't mirrored to BigQuery — read it straight from
-        // Firestore (one tiny doc) and pass the map into the BQ aggregator.
-        const targetsSnap = await db.collection("org_targets").doc(orgId).get();
-        const orgTargets = targetsSnap.exists ? (targetsSnap.data() as Record<string, unknown>) : null;
-        const snapshot = await computeKpiSnapshotBQ(orgId, orgTargets);
-        await db.collection("kpi_snapshots").doc(orgId).set(snapshot);
+        await db.collection("kpi_snapshots").doc(snapshot.orgId).set(snapshot);
         processed += 1;
       } catch (err) {
         failed += 1;
-        // One org's failure must not abort the whole sweep.
-        log("error", "kpi.org_aggregate_failed", { ...ctx, orgId }, err);
+        // One org's write failure must not abort the rest.
+        log("error", "kpi.org_write_failed", { ...ctx, orgId: snapshot.orgId }, err);
       }
     }
 

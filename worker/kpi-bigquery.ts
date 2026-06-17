@@ -1,22 +1,22 @@
 // ---------------------------------------------------------------------------
 // worker/kpi-bigquery.ts — BigQuery-backed KPI aggregation (ADR-009 Option A)
 // ---------------------------------------------------------------------------
-// Replaces the Firestore-direct scanner. Instead of re-reading every candidate
-// doc from Firestore on every cron tick (which incurs Firestore READ charges
-// that scale with corpus × frequency — ~$43/mo at 5 orgs × 5K candidates and
-// climbing), this queries the BigQuery "latest state" views the Firebase
-// Firestore→BigQuery extension streams into. BQ query cost stays inside the
-// 1 TiB/month free tier at this scale, and Firestore reads drop to just the org
-// list + org_targets. Output is the SAME kpi_snapshots/{orgId} contract
-// (lib/kpi/types.ts), so the dashboard, reader API and cron writer are untouched.
+// Computes the 7 KPIs over the BigQuery latest-state views the Firestore→BigQuery
+// extension streams into, and the cron writes one kpi_snapshots/{orgId} doc per
+// org. Output is the kpi_snapshots/{orgId} contract (lib/kpi/types.ts), so the
+// dashboard/reader are untouched.
 //
-// Views (docs/bigquery/*.sql, created by scripts/setup-bigquery-views.mjs over
-// the extension's *_raw_changelog tables):
-//   `<project>.<dataset>.candidates_latest | jds_latest | shortlist_funnel`.
-// Timestamps are projected as UNIX_MILLIS(...) so rows arrive as plain ms numbers
-// (no BigQueryTimestamp objects to coerce). If the dataset/views don't exist yet
-// (extension not installed) the query throws; handleKpiAggregate logs per-org and
-// continues, so a not-yet-provisioned warehouse degrades to empty, never crashes.
+// SCAN COST NOTE: the latest-state views aren't partitioned by org, so each query
+// scans the whole changelog. Running one query *per org* would therefore scan the
+// changelog N times per run (cost ∝ orgs × total-candidates). So the cron uses the
+// BATCHED path (computeAllOrgSnapshots): TWO queries total per run (no org filter),
+// grouped by org_id in memory — the changelog is scanned ONCE per run regardless of
+// org count. The single-org path (computeKpiSnapshotBQ) stays for ?orgId= manual
+// recompute. Both share buildSnapshot() so the numbers are identical.
+//
+// Views (docs/bigquery/*.sql): `<project>.<dataset>.candidates_latest | jds_latest`.
+// Timestamps are projected as UNIX_MILLIS(...) so rows arrive as plain ms numbers.
+// If the dataset/views don't exist yet the query throws; the caller logs and skips.
 
 import { BigQuery } from "@google-cloud/bigquery";
 import type { Funnel, KpiSnapshot, KpiSource } from "@/lib/kpi/types";
@@ -43,8 +43,9 @@ function tbl(name: string): string {
 }
 
 // --- row shapes (aliases mirror the SELECTs below) --------------------------
-type JdRow = { is_closed: boolean; created_ms: number | null; hired_ms: number | null };
+type JdRow = { org_id: string | null; is_closed: boolean; created_ms: number | null; hired_ms: number | null };
 type CandRow = {
+  org_id: string | null;
   fraud_risk: number | null;
   overlord_verdict: string | null;
   stage: string | null;
@@ -59,7 +60,7 @@ type CandRow = {
   job_is_closed: boolean;
 };
 
-// --- pure helpers (ported from the former lib/kpi/compute.ts) ----------------
+// --- pure helpers ------------------------------------------------------------
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -98,8 +99,6 @@ function monthBounds(d: Date): { start: number; end: number } {
     end: new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(),
   };
 }
-// #4: flagged when the structured verdict says suspicious|inflated, else a raw
-// numeric fraud_risk >= 0.4 (mirrors the cap thresholds in evaluation-runner.ts).
 function isInflatedOrSuspicious(verdict: string | null, fraudRisk: number | null): boolean {
   if (verdict === "suspicious" || verdict === "inflated") return true;
   return fraudRisk != null && fraudRisk >= 0.4;
@@ -114,53 +113,18 @@ function funnelOf(cands: CandRow[]): Funnel {
   return { selected, cleared, rate: rateOrNull(cleared, selected) };
 }
 
-// ---------------------------------------------------------------------------
-// Main entry — one snapshot per org from the BigQuery views.
-// orgTargets is the raw org_targets/{orgId} map (read from Firestore by the
-// caller, since org_targets isn't mirrored to BigQuery); null when unset.
-// ---------------------------------------------------------------------------
-export async function computeKpiSnapshotBQ(
-  orgId: string,
-  orgTargets: Record<string, unknown> | null
-): Promise<KpiSnapshot> {
-  const now = Date.now();
-  const nowDate = new Date(now);
-  const windowStart = now - WINDOW_DAYS * DAY_MS;
-  const quarter = quarterBounds(nowDate);
-  const month = monthBounds(nowDate);
-  const period = quarterLabel(nowDate);
-
-  const bq = client();
-
-  // reqs for the org.
-  const jdQuery =
-    `SELECT is_closed, UNIX_MILLIS(created_at) AS created_ms, UNIX_MILLIS(hired_at) AS hired_ms ` +
-    `FROM ${tbl("jds_latest")} WHERE org_id = @orgId`;
-  // candidates for the org (scoped via the req join — candidates carry no orgId).
-  const candQuery =
-    `SELECT SAFE_CAST(c.fraud_risk AS FLOAT64) AS fraud_risk, c.overlord_verdict, c.stage, ` +
-    `c.shortlist_rank, c.selected_for_interview, c.interview_outcome, c.source, ` +
-    `UNIX_MILLIS(c.offer_extended_at) AS offer_extended_ms, ` +
-    `UNIX_MILLIS(c.offer_accepted_at) AS offer_accepted_ms, ` +
-    `UNIX_MILLIS(c.hired_at) AS hired_ms, UNIX_MILLIS(c.submitted_at) AS submitted_ms, ` +
-    `j.is_closed AS job_is_closed ` +
-    `FROM ${tbl("candidates_latest")} AS c ` +
-    `JOIN ${tbl("jds_latest")} AS j ON c.job_id = j.job_id ` +
-    `WHERE j.org_id = @orgId`;
-
-  const [jdRes, candRes] = await Promise.all([
-    bq.query({ query: jdQuery, params: { orgId }, location: LOCATION }),
-    bq.query({ query: candQuery, params: { orgId }, location: LOCATION }),
-  ]);
-  const jdRowsRaw = (jdRes[0] ?? []) as Record<string, unknown>[];
-  const candRowsRaw = (candRes[0] ?? []) as Record<string, unknown>[];
-
-  const jds: JdRow[] = jdRowsRaw.map((r) => ({
+// --- row mappers (shared by single-org and batched fetch) -------------------
+function mapJdRow(r: Record<string, unknown>): JdRow {
+  return {
+    org_id: str(r.org_id),
     is_closed: r.is_closed === true,
     created_ms: asNum(r.created_ms),
     hired_ms: asNum(r.hired_ms),
-  }));
-  const cands: CandRow[] = candRowsRaw.map((r) => ({
+  };
+}
+function mapCandRow(r: Record<string, unknown>): CandRow {
+  return {
+    org_id: str(r.org_id),
     fraud_risk: asNum(r.fraud_risk),
     overlord_verdict: str(r.overlord_verdict),
     stage: str(r.stage),
@@ -173,7 +137,47 @@ export async function computeKpiSnapshotBQ(
     hired_ms: asNum(r.hired_ms),
     submitted_ms: asNum(r.submitted_ms),
     job_is_closed: r.job_is_closed === true,
-  }));
+  };
+}
+
+// SELECT lists (org_id carried for batched grouping). `whereOrg` filters one org.
+function jdQuery(whereOrg: boolean): string {
+  return (
+    `SELECT org_id, is_closed, UNIX_MILLIS(created_at) AS created_ms, UNIX_MILLIS(hired_at) AS hired_ms ` +
+    `FROM ${tbl("jds_latest")}` +
+    (whereOrg ? ` WHERE org_id = @orgId` : ``)
+  );
+}
+function candQuery(whereOrg: boolean): string {
+  return (
+    `SELECT j.org_id AS org_id, SAFE_CAST(c.fraud_risk AS FLOAT64) AS fraud_risk, c.overlord_verdict, c.stage, ` +
+    `c.shortlist_rank, c.selected_for_interview, c.interview_outcome, c.source, ` +
+    `UNIX_MILLIS(c.offer_extended_at) AS offer_extended_ms, ` +
+    `UNIX_MILLIS(c.offer_accepted_at) AS offer_accepted_ms, ` +
+    `UNIX_MILLIS(c.hired_at) AS hired_ms, UNIX_MILLIS(c.submitted_at) AS submitted_ms, ` +
+    `j.is_closed AS job_is_closed ` +
+    `FROM ${tbl("candidates_latest")} AS c ` +
+    `JOIN ${tbl("jds_latest")} AS j ON c.job_id = j.job_id` +
+    (whereOrg ? ` WHERE j.org_id = @orgId` : ``)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pure KPI math — operates on already-fetched rows for ONE org. Shared by the
+// single-org and batched paths so the numbers are byte-identical either way.
+// ---------------------------------------------------------------------------
+function buildSnapshot(
+  orgId: string,
+  jds: JdRow[],
+  cands: CandRow[],
+  orgTargets: Record<string, unknown> | null,
+  now: number
+): KpiSnapshot {
+  const nowDate = new Date(now);
+  const windowStart = now - WINDOW_DAYS * DAY_MS;
+  const quarter = quarterBounds(nowDate);
+  const month = monthBounds(nowDate);
+  const period = quarterLabel(nowDate);
 
   // #1 Time-to-fill — median(hiredAt − createdAt) over reqs hired in window.
   const fillDays: number[] = [];
@@ -293,4 +297,61 @@ export async function computeKpiSnapshotBQ(
     shortlistQuality,
     sources,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Single-org path (manual ?orgId= recompute) — filtered queries, then math.
+// ---------------------------------------------------------------------------
+export async function computeKpiSnapshotBQ(
+  orgId: string,
+  orgTargets: Record<string, unknown> | null
+): Promise<KpiSnapshot> {
+  const bq = client();
+  const [jdRes, candRes] = await Promise.all([
+    bq.query({ query: jdQuery(true), params: { orgId }, location: LOCATION }),
+    bq.query({ query: candQuery(true), params: { orgId }, location: LOCATION }),
+  ]);
+  const jds = ((jdRes[0] ?? []) as Record<string, unknown>[]).map(mapJdRow);
+  const cands = ((candRes[0] ?? []) as Record<string, unknown>[]).map(mapCandRow);
+  return buildSnapshot(orgId, jds, cands, orgTargets, Date.now());
+}
+
+// ---------------------------------------------------------------------------
+// Batched path (the cron) — TWO queries total for ALL orgs, grouped in memory.
+// The changelog is scanned once per run regardless of org count (no N² blow-up).
+// Builds a snapshot for every orgId passed in (orgs with no rows → all-zero),
+// preserving the "every org gets a snapshot" behaviour.
+// ---------------------------------------------------------------------------
+export async function computeAllOrgSnapshots(
+  orgIds: string[],
+  orgTargetsByOrg: Map<string, Record<string, unknown> | null>
+): Promise<KpiSnapshot[]> {
+  const bq = client();
+  const [jdRes, candRes] = await Promise.all([
+    bq.query({ query: jdQuery(false), location: LOCATION }),
+    bq.query({ query: candQuery(false), location: LOCATION }),
+  ]);
+  const jdsByOrg = new Map<string, JdRow[]>();
+  for (const raw of (jdRes[0] ?? []) as Record<string, unknown>[]) {
+    const row = mapJdRow(raw);
+    if (!row.org_id) continue;
+    (jdsByOrg.get(row.org_id) ?? jdsByOrg.set(row.org_id, []).get(row.org_id)!).push(row);
+  }
+  const candsByOrg = new Map<string, CandRow[]>();
+  for (const raw of (candRes[0] ?? []) as Record<string, unknown>[]) {
+    const row = mapCandRow(raw);
+    if (!row.org_id) continue;
+    (candsByOrg.get(row.org_id) ?? candsByOrg.set(row.org_id, []).get(row.org_id)!).push(row);
+  }
+
+  const now = Date.now();
+  return orgIds.map((orgId) =>
+    buildSnapshot(
+      orgId,
+      jdsByOrg.get(orgId) ?? [],
+      candsByOrg.get(orgId) ?? [],
+      orgTargetsByOrg.get(orgId) ?? null,
+      now
+    )
+  );
 }
