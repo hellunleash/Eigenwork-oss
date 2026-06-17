@@ -28,9 +28,11 @@ RUN npm install --no-audit --no-fund
 COPY lib ./lib
 
 # Worker source + tsconfig (tsconfig must stay alongside index.ts so its
-# relative `paths: @/* -> ../*` resolves to /app/lib).
+# relative `paths: @/* -> ../*` resolves to /app/lib). Copy ALL worker *.ts
+# (index.ts + kpi-bigquery.ts + any future modules) so a new worker file is
+# never silently left out of the image.
 COPY worker/tsconfig.json ./worker/
-COPY worker/index.ts ./worker/
+COPY worker/*.ts ./worker/
 
 # Cloud Run health probe + traffic
 ENV NODE_ENV=production
