@@ -1,0 +1,12 @@
+{
+  "projects": {},
+  "targets": {},
+  "etags": {
+    "eigenwork": {
+      "extensionInstances": {
+        "firestore-bigquery-export-candidates": "ee5dd5d83a3c93b3816dbd09cbc075c7de2f94a981d36fb5cb38fc862a34d3ff",
+        "firestore-bigquery-export-jds": "d8a951cf1dd1cc27c0b03d920d121ceceed4b0b5e3cab0a57e4ec93e37d21c62"
+      }
+    }
+  }
+}
