@@ -31,19 +31,22 @@ export function candidateFacts(c: CandidateDetail): string {
 
 export async function synthDescribe(c: CandidateDetail): Promise<string> {
   return geminiText(
-    `${STYLE}\n\nDescribe this candidate: who they are, their standout strength, and the main thing to probe in an interview.\n\nCANDIDATE DATA:\n${candidateFacts(c)}`
+    `${STYLE}\n\nDescribe this candidate: who they are, their standout strength, and the main thing to probe in an interview.\n\nCANDIDATE DATA:\n${candidateFacts(c)}`,
+    { label: "synthesis_describe" }
   );
 }
 
 export async function synthCompare(cs: CandidateDetail[]): Promise<string> {
   const blocks = cs.map((c, i) => `Candidate ${i + 1}:\n${candidateFacts(c)}`).join("\n\n");
   return geminiText(
-    `${STYLE}\n\nCompare these candidates for the same role and say who is stronger and why, grounded in the evidence. If they're close, say so plainly.\n\n${blocks}`
+    `${STYLE}\n\nCompare these candidates for the same role and say who is stronger and why, grounded in the evidence. If they're close, say so plainly.\n\n${blocks}`,
+    { label: "synthesis_compare" }
   );
 }
 
 export async function synthExplain(c: CandidateDetail, topic: string): Promise<string> {
   return geminiText(
-    `${STYLE}\n\nThe recruiter asked specifically about: "${topic}". Answer just that, grounded in this candidate's data.\n\nCANDIDATE DATA:\n${candidateFacts(c)}`
+    `${STYLE}\n\nThe recruiter asked specifically about: "${topic}". Answer just that, grounded in this candidate's data.\n\nCANDIDATE DATA:\n${candidateFacts(c)}`,
+    { label: "synthesis_explain" }
   );
 }

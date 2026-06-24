@@ -77,7 +77,7 @@ Return JSON with only the fields relevant to the chosen intent, e.g.
 {"intent":"compare","candidateIds":["abc","def"]} or
 {"intent":"move_stage","candidateIds":["abc"],"targetStage":"interviewing"}`;
 
-  const result = await geminiJson<RouterResult>(prompt, { temperature: 0 });
+  const result = await geminiJson<RouterResult>(prompt, { temperature: 0, label: "router" });
   if (!result || !result.intent) return { intent: "help" };
 
   // Guardrail 4: drop any id the model produced that isn't a real roster entry.

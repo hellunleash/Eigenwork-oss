@@ -23,7 +23,7 @@ ${grounding}
 ANSWER:
 ${answer}`;
 
-  const verdict = await geminiJson<JudgeVerdict>(prompt, { temperature: 0 });
+  const verdict = await geminiJson<JudgeVerdict>(prompt, { temperature: 0, label: "judge" });
   if (!verdict || typeof verdict.ok !== "boolean") return { ok: true };
   return verdict;
 }
