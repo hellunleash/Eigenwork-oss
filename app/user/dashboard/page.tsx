@@ -26,6 +26,7 @@ import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
 import { FreeClaimGate } from "../FreeClaimGate";
 import { PreviewSidebar } from "../PreviewSidebar";
+import { ConnectSlackCard } from "../ConnectSlackCard";
 
 const notifySoon = (label: string) =>
   typeof window !== "undefined" && window.alert(`${label} isn’t wired up yet — coming soon.`);
@@ -289,6 +290,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-8 space-y-10">
+        {/* EigenBot for Slack — connect / reconnect + post-install status */}
+        <ConnectSlackCard />
+
         {/* GET STARTED hero (empty-state) */}
         {rows.length === 0 && (
           <section className="relative rounded-2xl overflow-hidden border border-zinc-200 dark:border-white/[0.08] bg-zinc-50/60 dark:bg-white/[0.02]">

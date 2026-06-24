@@ -80,6 +80,7 @@ export default function InterviewPipelinePage() {
   const [authChecking, setAuthChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState<Set<string>>(new Set());
+  const [drafting, setDrafting] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -184,6 +185,31 @@ export default function InterviewPipelinePage() {
       if (typeof window !== "undefined") window.alert("Could not update the candidate. Please try again.");
     } finally {
       setSaving((s) => { const n = new Set(s); n.delete(id); return n; });
+    }
+  };
+
+  // Draft a personalized outreach email from the candidate's persisted card and
+  // open it in the recruiter's own mail client (mailto). The server never sends —
+  // the recruiter reviews and hits Send themselves (ADR-010 outreach gate).
+  const draftOutreach = async (id: string) => {
+    setDrafting((s) => new Set(s).add(id));
+    try {
+      const token = await getIdTokenOrNull();
+      const res = await fetch(`/api/candidate/${encodeURIComponent(id)}/outreach`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!res.ok) throw new Error("draft_failed");
+      const data = (await res.json()) as { email: string | null; mailto: string | null };
+      if (!data.email || !data.mailto) {
+        if (typeof window !== "undefined") window.alert("No email on file for this candidate — can't draft outreach.");
+        return;
+      }
+      if (typeof window !== "undefined") window.location.href = data.mailto;
+    } catch {
+      if (typeof window !== "undefined") window.alert("Could not draft outreach. Please try again.");
+    } finally {
+      setDrafting((s) => { const n = new Set(s); n.delete(id); return n; });
     }
   };
 
@@ -301,6 +327,15 @@ export default function InterviewPipelinePage() {
                         {(c.stage === "rejected" || c.stage === "withdrawn") && (
                           <ActBtn tone="muted" label="Restore to interview" onClick={() => move(c.id, "interviewing")} />
                         )}
+                        <button
+                          type="button"
+                          onClick={() => draftOutreach(c.id)}
+                          disabled={drafting.has(c.id)}
+                          className="px-2.5 py-1 rounded-md text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-500/15 disabled:opacity-50"
+                          title="Draft a personalized outreach email"
+                        >
+                          {drafting.has(c.id) ? "Drafting…" : "Draft outreach"}
+                        </button>
                         <button
                           type="button"
                           onClick={() => notifySoon("Interview notes")}
