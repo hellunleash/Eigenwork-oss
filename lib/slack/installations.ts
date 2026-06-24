@@ -18,6 +18,10 @@ export type SlackInstallation = {
   botToken: string;
   botUserId: string | null;
   installerUid: string;
+  /** The installing user's Slack user id (from oauth.v2.access authed_user.id).
+   *  Authorizes the installer as themselves independent of email — their Slack
+   *  profile email may not match their EigenWork login (guardrail 2, fail-closed). */
+  installerSlackUserId: string | null;
 };
 
 const COLLECTION = "slack_installations";
@@ -32,6 +36,7 @@ export async function saveInstallation(inst: SlackInstallation): Promise<void> {
       botToken: inst.botToken,
       botUserId: inst.botUserId,
       installerUid: inst.installerUid,
+      installerSlackUserId: inst.installerSlackUserId ?? null,
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -51,5 +56,6 @@ export async function getInstallation(teamId: string): Promise<SlackInstallation
     botToken: d.botToken,
     botUserId: typeof d.botUserId === "string" ? d.botUserId : null,
     installerUid: typeof d.installerUid === "string" ? d.installerUid : "",
+    installerSlackUserId: typeof d.installerSlackUserId === "string" ? d.installerSlackUserId : null,
   };
 }

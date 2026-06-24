@@ -13,6 +13,7 @@ import { createJd } from "@/lib/jd";
 import { STAGES } from "@/lib/stage";
 import { composeOutreach, buildMailto } from "@/lib/outreach";
 import { logAgentRun } from "@/lib/agent/audit";
+import { loadConvo, saveTurn } from "@/lib/agent/memory";
 
 /**
  * The agent turn (ADR-010 Phase 2 + 3). Free-text in → router → execute → (for
@@ -30,6 +31,9 @@ export type AgentTurnParams = {
   teamId?: string;
   channel?: string;
   slackUserId?: string;
+  /** Conversation key (DM channel or thread root). When set, the turn loads +
+   *  persists short rolling memory so follow-ups ("both", "the first one") resolve. */
+  convoKey?: string;
 };
 
 /** A reply may be plain text or carry Slack Block Kit (e.g. the move_stage
@@ -39,7 +43,8 @@ export type AgentReply = { text: string; blocks?: unknown[] };
 export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply> {
   const { orgId, userId, text } = params;
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
-  const route = await routeMessage(text, jobs, roster);
+  const history = params.convoKey ? await loadConvo(params.convoKey) : [];
+  const route = await routeMessage(text, jobs, roster, history);
 
   await logAgentRun({
     orgId,
@@ -52,6 +57,29 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply>
     detail: { intent: route.intent, candidateIds: route.candidateIds ?? [], jobId: route.jobId ?? null },
   });
 
+  const reply = await executeRoute(orgId, userId, route, roster, text, params);
+
+  // Persist the turn so the NEXT message can resolve follow-ups against it.
+  if (params.convoKey) {
+    const ids = referencedIds(route, roster);
+    const summary = reply.text.length > 300 ? `${reply.text.slice(0, 300)}…` : reply.text;
+    await saveTurn(
+      params.convoKey,
+      { role: "user", text },
+      { role: "bot", text: summary, ...(ids.length ? { ids } : {}) }
+    );
+  }
+  return reply;
+}
+
+async function executeRoute(
+  orgId: string,
+  userId: string,
+  route: RouterResult,
+  roster: CandidateLite[],
+  text: string,
+  params: AgentTurnParams
+): Promise<AgentReply> {
   switch (route.intent) {
     case "help":
       return { text: helpText() };
@@ -72,6 +100,19 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply>
     default:
       return { text: helpText() };
   }
+}
+
+/** The candidate ids in play after a turn — what the next message's "both"/"them"/
+ *  "the first one" should resolve against. For `find` it's the listed shortlist. */
+function referencedIds(route: RouterResult, roster: CandidateLite[]): string[] {
+  if (route.intent === "find") return rankedPool(route, roster).map((c) => c.id);
+  return route.candidateIds ?? [];
+}
+
+/** Shared shortlist ranking used by `find` output and `referencedIds`. */
+function rankedPool(route: RouterResult, roster: CandidateLite[]): CandidateLite[] {
+  const pool = route.jobId ? roster.filter((c) => c.jobId === route.jobId) : roster;
+  return [...pool].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10);
 }
 
 /**
@@ -174,23 +215,36 @@ async function synthesizeAnswer(orgId: string, route: RouterResult, question: st
 
   const verdict = await judgeAnswer(question, answer, grounding);
   if (!verdict.ok) {
-    // Jargon leak → final scrub. Any other grounding failure → safe fallback
-    // rather than risk an unsupported claim.
+    // Jargon leak → final scrub. Any other grounding failure → degrade to a
+    // deterministic, grounded-by-construction card summary rather than a dead-end
+    // (the judge is occasionally over-strict on borderline phrasings; the persisted
+    // card is the recruiter-facing source of truth and can't hallucinate).
     if (verdict.reason?.toLowerCase().includes("jargon")) return scrubJargon(answer);
-    return "I don't have confident, grounded data to answer that precisely. Try asking about a specific candidate's strengths or the concern to probe.";
+    return cardSummary(details);
   }
   return answer;
 }
 
+/** Deterministic fallback: each candidate's persisted headline + edge + score.
+ *  Grounded by construction (the card already passed ADR-007 validation). */
+function cardSummary(details: CandidateDetail[]): string {
+  const blocks = details.map((d) => {
+    const lines = [`*${d.name}*${d.score != null ? ` — score ${d.score}` : ""}`];
+    if (d.card?.title) lines.push(d.card.title);
+    if (d.card?.edge) lines.push(d.card.edge);
+    return lines.join("\n");
+  });
+  const intro = details.length > 1 ? "Here's where each stands:" : "Here's the summary:";
+  return [intro, ...blocks].join("\n\n");
+}
+
 function findCandidates(route: RouterResult, roster: CandidateLite[]): string {
-  let pool = roster;
-  if (route.jobId) pool = roster.filter((c) => c.jobId === route.jobId);
-  if (pool.length === 0) {
+  const top = rankedPool(route, roster);
+  if (top.length === 0) {
     return route.jobId
       ? "That role doesn't have a shortlist yet — run a match on the dashboard first."
       : "You don't have any shortlisted candidates yet. Once candidates apply and are screened, I can rank them here.";
   }
-  const top = [...pool].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10);
   const header = route.jobId && top[0] ? `Top candidates for *${top[0].jobTitle || "this role"}*:` : "Your strongest candidates:";
   const lines = top.map((c, i) => `${i + 1}. *${c.name}* — score ${c.score ?? "—"}${c.jobTitle && !route.jobId ? ` (${c.jobTitle})` : ""}`);
   return [header, ...lines, "", "_Ask “tell me about <name>” or “why is <A> stronger than <B>?” for the detail._"].join("\n");

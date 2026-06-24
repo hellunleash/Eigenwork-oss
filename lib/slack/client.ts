@@ -9,7 +9,7 @@ const SLACK_API = "https://slack.com/api";
 export async function slackPostMessage(
   botToken: string,
   args: { channel: string; text?: string; blocks?: unknown[]; thread_ts?: string }
-): Promise<void> {
+): Promise<string | null> {
   const res = await fetch(`${SLACK_API}/chat.postMessage`, {
     method: "POST",
     headers: {
@@ -18,8 +18,9 @@ export async function slackPostMessage(
     },
     body: JSON.stringify(args),
   });
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; ts?: string };
   if (!data.ok) throw new Error(`slack_postMessage_failed: ${data.error ?? res.status}`);
+  return typeof data.ts === "string" ? data.ts : null;
 }
 
 export async function slackUpdateMessage(

@@ -47,6 +47,7 @@ export async function GET(req: Request) {
     botToken: result.botToken,
     botUserId: result.botUserId ?? null,
     installerUid: verified.uid,
+    installerSlackUserId: result.authedUser ?? null,
   });
   log("info", "slack.installed", { requestId, teamId: result.teamId, orgId: verified.orgId });
   return back("connected");

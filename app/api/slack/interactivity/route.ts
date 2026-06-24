@@ -68,6 +68,17 @@ export async function POST(req: Request) {
       const installation = await getInstallation(teamId);
       if (!installation) return;
       const actor = await resolveSlackActor(installation, slackUserId);
+      if (!actor) {
+        // Fail-closed (guardrail 2): only in-org actors can execute a write.
+        log("warn", "slack.actor_denied_interactivity", { requestId, teamId, slackUserId });
+        await slackUpdateMessage(installation.botToken, {
+          channel,
+          ts: messageTs,
+          text: "You don't have access to do that in EigenWork.",
+          blocks: [],
+        });
+        return;
+      }
 
       if (action.action_id === "stage_cancel") {
         await slackUpdateMessage(installation.botToken, {
