@@ -20,6 +20,7 @@ export type CandidateLite = {
 export type CandidateDetail = {
   id: string;
   name: string;
+  email: string | null;
   jobId: string;
   jobTitle: string;
   score: number | null;
@@ -91,6 +92,7 @@ export async function getCandidateDetail(orgId: string, candidateId: string): Pr
   return {
     id: candidateId,
     name: typeof d.candidateName === "string" && d.candidateName ? d.candidateName : "Candidate",
+    email: typeof d.email === "string" && d.email.trim() ? d.email.trim() : null,
     jobId,
     jobTitle: typeof jdSnap.data()?.title === "string" ? (jdSnap.data()!.title as string) : "",
     score: typeof d.score === "number" ? d.score : null,

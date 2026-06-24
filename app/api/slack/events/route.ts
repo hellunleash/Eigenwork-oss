@@ -114,7 +114,12 @@ export async function POST(req: Request) {
           channel,
           slackUserId,
         });
-        await slackPostMessage(installation.botToken, { channel, thread_ts: threadTs, text: reply });
+        await slackPostMessage(installation.botToken, {
+          channel,
+          thread_ts: threadTs,
+          text: reply.text,
+          ...(reply.blocks && { blocks: reply.blocks }),
+        });
       } catch (err) {
         log("error", "slack.process_failed", { requestId, teamId }, err);
       }

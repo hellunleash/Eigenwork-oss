@@ -10,6 +10,8 @@ import { synthDescribe, synthCompare, synthExplain, candidateFacts } from "@/lib
 import { judgeAnswer } from "@/lib/agent/judge";
 import { scrubJargon } from "@/lib/agent/jargon";
 import { createJd } from "@/lib/jd";
+import { STAGES } from "@/lib/stage";
+import { composeOutreach, buildMailto } from "@/lib/outreach";
 import { logAgentRun } from "@/lib/agent/audit";
 
 /**
@@ -30,7 +32,11 @@ export type AgentTurnParams = {
   slackUserId?: string;
 };
 
-export async function runAgentTurn(params: AgentTurnParams): Promise<string> {
+/** A reply may be plain text or carry Slack Block Kit (e.g. the move_stage
+ *  confirm buttons). The events route posts both. */
+export type AgentReply = { text: string; blocks?: unknown[] };
+
+export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply> {
   const { orgId, userId, text } = params;
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
   const route = await routeMessage(text, jobs, roster);
@@ -48,20 +54,99 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<string> {
 
   switch (route.intent) {
     case "help":
-      return helpText();
+      return { text: helpText() };
     case "clarify":
-      return route.clarifyQuestion || "Which candidate do you mean? Tell me the name as it appears in your pipeline.";
+      return { text: route.clarifyQuestion || "Which candidate do you mean? Tell me the name as it appears in your pipeline." };
     case "find":
-      return findCandidates(route, roster);
+      return { text: findCandidates(route, roster) };
     case "create_intake":
-      return createIntake(orgId, userId, route.intake ?? {}, params);
+      return { text: await createIntake(orgId, userId, route.intake ?? {}, params) };
     case "describe":
     case "explain":
     case "compare":
-      return synthesizeAnswer(orgId, route, text);
+      return { text: await synthesizeAnswer(orgId, route, text) };
+    case "move_stage":
+      return buildStageConfirm(route, roster);
+    case "draft_outreach":
+      return buildOutreachDrafts(orgId, route, params);
     default:
-      return helpText();
+      return { text: helpText() };
   }
+}
+
+/**
+ * move_stage (soft gate): post an in-thread confirm with Confirm/Cancel buttons.
+ * The actual stage write happens in /api/slack/interactivity when Confirm is
+ * clicked — guarding against a misparsed name. The button `value` carries the
+ * resolved ids + stage; moveStage re-checks org ownership on execute.
+ */
+function buildStageConfirm(route: RouterResult, roster: CandidateLite[]): AgentReply {
+  const ids = route.candidateIds ?? [];
+  if (ids.length === 0) {
+    return { text: "I couldn't match that to a candidate in your shortlists — try the exact name as it appears in your pipeline." };
+  }
+  const stage = route.targetStage;
+  if (!stage || !(STAGES as readonly string[]).includes(stage)) {
+    return { text: "Which stage should I move them to — interviewing, offer, hired, rejected, or withdrawn?" };
+  }
+  const names = ids.map((id) => roster.find((c) => c.id === id)?.name ?? "the candidate");
+  const label = names.length === 1 ? `*${names[0]}*` : `*${names.length} candidates* (${names.join(", ")})`;
+  const prompt = `Move ${label} to *${stage}*?`;
+  const value = JSON.stringify({ candidateIds: ids, stage, outcome: route.outcome ?? null });
+  return {
+    text: prompt,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: prompt } },
+      {
+        type: "actions",
+        elements: [
+          { type: "button", style: "primary", text: { type: "plain_text", text: "Confirm" }, action_id: "stage_confirm", value },
+          { type: "button", text: { type: "plain_text", text: "Cancel" }, action_id: "stage_cancel", value: "{}" },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * draft_outreach (hard gate): compose a personalized email per candidate from the
+ * persisted card and post it with a `mailto:` link. The recruiter sends from their
+ * OWN client — the bot never sends. Capped at 5 to keep the message readable.
+ */
+async function buildOutreachDrafts(orgId: string, route: RouterResult, params: AgentTurnParams): Promise<AgentReply> {
+  const ids = (route.candidateIds ?? []).slice(0, 5);
+  if (ids.length === 0) {
+    return { text: "Who should I draft outreach to? Tell me the candidate's name." };
+  }
+  const details = (await Promise.all(ids.map((id) => getCandidateDetail(orgId, id)))).filter(
+    (d): d is CandidateDetail => d !== null
+  );
+  if (details.length === 0) return { text: "I couldn't load that candidate's details." };
+
+  const parts = details.map((d) => {
+    const draft = composeOutreach({
+      candidateName: d.name,
+      roleTitle: d.jobTitle,
+      cardTitle: d.card?.title ?? null,
+      cardEdge: d.card?.edge ?? null,
+    });
+    if (!d.email) return `*${d.name}* — no email on file, can't draft outreach.`;
+    const mailto = buildMailto(d.email, draft);
+    return `*${d.name}* — _${draft.subject}_\n${draft.body}\n<${mailto}|📧 Open in your email to send>`;
+  });
+
+  await logAgentRun({
+    orgId,
+    userId: params.userId,
+    surface: "slack",
+    kind: "action",
+    teamId: params.teamId,
+    channel: params.channel,
+    slackUserId: params.slackUserId,
+    detail: { action: "draft_outreach", candidateIds: ids },
+  });
+
+  return { text: parts.join("\n\n———\n\n") };
 }
 
 async function synthesizeAnswer(orgId: string, route: RouterResult, question: string): Promise<string> {
@@ -160,7 +245,8 @@ function helpText(): string {
     "• *Tell me about <candidate>*",
     "• *Why is <A> stronger than <B>?*",
     "• *Who are my top candidates for <role>?*",
-    "• *Explain <candidate>'s flag*",
+    "• *Move <candidate> to interview* / *reject <candidate>*",
+    "• *Draft outreach to <candidate>*",
     "• *Create an intake link for a senior backend role*",
   ].join("\n");
 }

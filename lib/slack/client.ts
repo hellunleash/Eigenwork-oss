@@ -22,6 +22,22 @@ export async function slackPostMessage(
   if (!data.ok) throw new Error(`slack_postMessage_failed: ${data.error ?? res.status}`);
 }
 
+export async function slackUpdateMessage(
+  botToken: string,
+  args: { channel: string; ts: string; text?: string; blocks?: unknown[] }
+): Promise<void> {
+  const res = await fetch(`${SLACK_API}/chat.update`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${botToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(args),
+  });
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!data.ok) throw new Error(`slack_update_failed: ${data.error ?? res.status}`);
+}
+
 export async function slackGetUserEmail(botToken: string, userId: string): Promise<string | null> {
   const res = await fetch(`${SLACK_API}/users.info?user=${encodeURIComponent(userId)}`, {
     headers: { Authorization: `Bearer ${botToken}` },
