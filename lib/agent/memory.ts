@@ -44,3 +44,42 @@ export async function saveTurn(key: string, userTurn: ConvoTurn, botTurn: ConvoT
     /* best-effort */
   }
 }
+
+/**
+ * Pending intake draft (create_intake confirm-and-fill flow). A create_intake
+ * proposes a draft JD and parks it here keyed by conversation; subsequent replies
+ * edit it or confirm it. Stored on the same agent_threads doc as `pendingIntake`.
+ */
+export type PendingIntake = Record<string, unknown>;
+
+export async function loadPendingIntake(key: string): Promise<PendingIntake | null> {
+  try {
+    const snap = await getAdminDb().collection(COLLECTION).doc(docId(key)).get();
+    const p = snap.data()?.pendingIntake;
+    return p && typeof p === "object" ? (p as PendingIntake) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function savePendingIntake(key: string, fields: PendingIntake): Promise<void> {
+  try {
+    await getAdminDb()
+      .collection(COLLECTION)
+      .doc(docId(key))
+      .set({ pendingIntake: fields, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function clearPendingIntake(key: string): Promise<void> {
+  try {
+    await getAdminDb()
+      .collection(COLLECTION)
+      .doc(docId(key))
+      .set({ pendingIntake: FieldValue.delete() }, { merge: true });
+  } catch {
+    /* best-effort */
+  }
+}

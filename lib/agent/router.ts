@@ -17,6 +17,9 @@ export type Intent =
   | "move_stage"
   | "draft_outreach"
   | "list_roles"
+  | "confirm_intake"
+  | "edit_intake"
+  | "cancel_intake"
   | "help"
   | "clarify";
 
@@ -26,6 +29,9 @@ export type IntakeFields = {
   location_type?: string;
   employment_type?: string;
   yoe_required?: string;
+  work_auth_us_required?: boolean;
+  work_auth_eu_required?: boolean;
+  work_auth_provided?: boolean;
 };
 
 export type RouterResult = {
@@ -45,7 +51,8 @@ export async function routeMessage(
   text: string,
   jobs: JobLite[],
   roster: CandidateLite[],
-  history: ConvoTurn[] = []
+  history: ConvoTurn[] = [],
+  pendingIntake: Record<string, unknown> | null = null
 ): Promise<RouterResult> {
   const jobsList =
     jobs.map((j) => `- ${j.id} :: ${j.title || "untitled"}${j.seniority ? ` (${j.seniority})` : ""}`).join("\n") || "(none)";
@@ -73,7 +80,7 @@ Intents:
 - "explain": explain a specific aspect of ONE candidate (a flag, a signal, the score). Set candidateIds (one) and topic.
 - "find": find / list / rank CANDIDATES for a role or a query. Set jobId if a named role matches the jobs list, otherwise set roleQuery.
 - "list_roles": the recruiter asks about their ROLES/JOBS themselves — "how many roles do I have", "list my roles", "what roles/positions are open", "my pipeline". This is about jobs, NOT candidates. No id resolution needed.
-- "create_intake": the recruiter wants an application/intake link for a NEW role. Extract intake:{title, seniority, location_type, employment_type, yoe_required} from the text (any subset you can infer; omit unknown fields).
+- "create_intake": the recruiter wants an application/intake link for a NEW role (or pastes a JD to open one). Extract intake:{title, seniority, location_type, employment_type, yoe_required, work_auth_us_required, work_auth_eu_required, work_auth_provided} from the text (any subset you can infer; omit unknown fields). Work-auth mapping: "US work auth required"/"must be authorized to work in the US" → work_auth_us_required:true; "EU work auth required" → work_auth_eu_required:true; "we sponsor"/"visa sponsorship provided" → work_auth_provided:true.
 - "move_stage": the recruiter wants to move/advance/reject candidate(s) in the pipeline. Set candidateIds (one or more) and targetStage (exactly one of: interviewing, offer, hired, rejected, withdrawn). Map natural language: "move to interview" / "shortlist for interview" → interviewing; "extend an offer" / "send offer" → offer; "mark hired" / "hire them" → hired; "reject" / "pass on" / "interview failed" → rejected; "they withdrew" / "offer declined" → withdrawn. For "interview failed" also set outcome:"failed".
 - "draft_outreach": the recruiter wants a personalized outreach email drafted to candidate(s). Set candidateIds (one or more).
 - "help": greeting, a capabilities question, or unclear small talk.
@@ -96,7 +103,19 @@ ${jobsList}
 
 Candidates (id :: name — rank, score — job):
 ${rosterList}
-
+${
+  pendingIntake
+    ? `
+A DRAFT intake link is PENDING the recruiter's confirmation, with these fields:
+${JSON.stringify(pendingIntake)}
+For THIS message, strongly prefer one of:
+- "confirm_intake": they approve it as-is ("create it", "go", "yes", "ship it", "looks good", "make the link", "do it").
+- "edit_intake": they change or add a field. Set intake:{...} with ONLY the changed fields (same field names + work-auth mapping as create_intake; "remote/onsite/hybrid"→location_type, "full-time/contract/intern"→employment_type, "<n>+ years"→yoe_required, "no work auth needed"/"open to anyone"→all three work_auth_* false).
+- "cancel_intake": they call it off ("cancel", "never mind", "forget it", "scrap it").
+Only if the message is a clearly NEW, unrelated request (a different role, or a question about candidates) classify it normally — the draft is then abandoned.
+`
+    : ""
+}
 Recruiter message:
 """${text}"""
 

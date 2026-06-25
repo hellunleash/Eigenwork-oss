@@ -16,7 +16,13 @@ import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
 import { STAGES } from "@/lib/stage";
 import { composeOutreach, buildMailto } from "@/lib/outreach";
 import { logAgentRun } from "@/lib/agent/audit";
-import { loadConvo, saveTurn } from "@/lib/agent/memory";
+import {
+  loadConvo,
+  saveTurn,
+  loadPendingIntake,
+  savePendingIntake,
+  clearPendingIntake,
+} from "@/lib/agent/memory";
 
 /**
  * The agent turn (ADR-010 Phase 2 + 3). Free-text in → router → execute → (for
@@ -47,7 +53,8 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply>
   const { orgId, userId, text } = params;
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
   const history = params.convoKey ? await loadConvo(params.convoKey) : [];
-  const route = await routeMessage(text, jobs, roster, history);
+  const pendingIntake = params.convoKey ? await loadPendingIntake(params.convoKey) : null;
+  const route = await routeMessage(text, jobs, roster, history, pendingIntake);
 
   await logAgentRun({
     orgId,
@@ -94,7 +101,14 @@ async function executeRoute(
     case "find":
       return { text: findCandidates(route, roster) };
     case "create_intake":
-      return { text: await createIntake(orgId, userId, route.intake ?? {}, params) };
+      return { text: await proposeIntake(orgId, userId, route.intake ?? {}, params) };
+    case "edit_intake":
+      return { text: await editIntake(route, params) };
+    case "confirm_intake":
+      return { text: await confirmIntake(orgId, userId, params) };
+    case "cancel_intake":
+      if (params.convoKey) await clearPendingIntake(params.convoKey);
+      return { text: "Okay — I won't create that link. Say *create an intake link for <role>* whenever you're ready." };
     case "describe":
     case "explain":
     case "compare":
@@ -256,46 +270,168 @@ function findCandidates(route: RouterResult, roster: CandidateLite[]): string {
   return [header, ...lines, "", "_Ask “tell me about <name>” or “why is <A> stronger than <B>?” for the detail._"].join("\n");
 }
 
-async function createIntake(
-  orgId: string,
-  userId: string,
-  intake: IntakeFields,
-  params: AgentTurnParams
-): Promise<string> {
-  // Generate the SAME structured JD the web flow does — parse the recruiter's
-  // request into role anchors, then build role_fit + one_liner — so a Slack-minted
-  // intake link has a complete role_fit and work_auth and /api/jd/match can score
-  // it. Best-effort: if parse fails, fall back to the router's extracted fields.
+/**
+ * create_intake is a confirm-and-fill flow (it WRITES a JD + consumes a role slot,
+ * so it's gated like move_stage). proposeIntake parses the request into a complete
+ * draft and parks it; the recruiter fills gaps (esp. work-auth, which the parser
+ * never produces) by replying, then confirms. Nothing is minted until confirm.
+ */
+type IntakeDraft = {
+  title: string;
+  seniority: string;
+  role_category: string;
+  tech_stack: string[];
+  location_type: string;
+  employment_type: string;
+  yoe_required: string;
+  work_auth_us_required: boolean;
+  work_auth_eu_required: boolean;
+  work_auth_provided: boolean;
+  primary: string[];
+  secondary: string[];
+  tertiary: string[];
+};
+
+/** Parse the recruiter's request into a full draft (same parse the web flow uses),
+ *  overlaying any fields the router extracted explicitly. */
+async function buildIntakeDraft(intake: IntakeFields, params: AgentTurnParams): Promise<IntakeDraft> {
   let parsed: Awaited<ReturnType<typeof parseJdText>> | null = null;
   try {
     parsed = await parseJdText(params.text);
   } catch {
     parsed = null;
   }
-  const title = intake.title || parsed?.title || "New role";
-  const primary = parsed?.primary ?? [];
-  const secondary = parsed?.secondary ?? [];
-  const tertiary = parsed?.tertiary ?? [];
-
-  const result = await createJd(orgId, userId, {
-    title,
+  return {
+    title: intake.title || parsed?.title || "New role",
     seniority: intake.seniority ?? parsed?.seniority ?? "",
     role_category: parsed?.role_category ?? "",
     tech_stack: parsed?.tech_stack ?? [],
     location_type: intake.location_type ?? parsed?.location_type ?? "",
     employment_type: intake.employment_type ?? parsed?.employment_type ?? "",
     yoe_required: intake.yoe_required ?? parsed?.yoe_required ?? "",
-    // Work-auth defaults to "no specific requirement" — same as a web JD where the
-    // recruiter leaves the boxes unchecked. They can refine it on the dashboard.
-    work_auth_us_required: false,
-    work_auth_eu_required: false,
-    work_auth_provided: false,
+    work_auth_us_required: Boolean(intake.work_auth_us_required),
+    work_auth_eu_required: Boolean(intake.work_auth_eu_required),
+    work_auth_provided: Boolean(intake.work_auth_provided),
+    primary: parsed?.primary ?? [],
+    secondary: parsed?.secondary ?? [],
+    tertiary: parsed?.tertiary ?? [],
+  };
+}
+
+function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
+  if (!p) return null;
+  const s = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
+  const a = (k: string) => (Array.isArray(p[k]) ? (p[k] as string[]) : []);
+  return {
+    title: s("title") || "New role",
+    seniority: s("seniority"),
+    role_category: s("role_category"),
+    tech_stack: a("tech_stack"),
+    location_type: s("location_type"),
+    employment_type: s("employment_type"),
+    yoe_required: s("yoe_required"),
+    work_auth_us_required: Boolean(p.work_auth_us_required),
+    work_auth_eu_required: Boolean(p.work_auth_eu_required),
+    work_auth_provided: Boolean(p.work_auth_provided),
+    primary: a("primary"),
+    secondary: a("secondary"),
+    tertiary: a("tertiary"),
+  };
+}
+
+/** Merge the router's edit (only the fields it returned) onto the draft. */
+function mergeEdit(d: IntakeDraft, intake: IntakeFields): IntakeDraft {
+  return {
+    ...d,
+    ...(intake.title ? { title: intake.title } : {}),
+    ...(intake.seniority ? { seniority: intake.seniority } : {}),
+    ...(intake.location_type ? { location_type: intake.location_type } : {}),
+    ...(intake.employment_type ? { employment_type: intake.employment_type } : {}),
+    ...(intake.yoe_required ? { yoe_required: intake.yoe_required } : {}),
+    ...(intake.work_auth_us_required !== undefined ? { work_auth_us_required: Boolean(intake.work_auth_us_required) } : {}),
+    ...(intake.work_auth_eu_required !== undefined ? { work_auth_eu_required: Boolean(intake.work_auth_eu_required) } : {}),
+    ...(intake.work_auth_provided !== undefined ? { work_auth_provided: Boolean(intake.work_auth_provided) } : {}),
+  };
+}
+
+function previewIntake(d: IntakeDraft): string {
+  const skills = [...d.primary, ...d.secondary, ...d.tertiary];
+  const authBits: string[] = [];
+  if (d.work_auth_us_required) authBits.push("US required");
+  if (d.work_auth_eu_required) authBits.push("EU required");
+  if (d.work_auth_provided) authBits.push("sponsorship provided");
+  const auth = authBits.length ? authBits.join(", ") : "none required (default)";
+  const set = (v: string) => (v && v.trim() ? v : "_not set_");
+  return [
+    `📋 Draft intake link — *${d.title}*`,
+    `• Seniority: ${set(d.seniority)}`,
+    `• Location: ${set(d.location_type)}`,
+    `• Type: ${set(d.employment_type)}`,
+    `• Experience: ${set(d.yoe_required)}`,
+    `• Work auth: ${auth}`,
+    `• Skills: ${skills.length ? skills.join(", ") : "_none detected_"}`,
+    "",
+    "Reply to change anything (e.g. *“require US work auth”*, *“hybrid”*, *“5+ years”*), or say *create it* to mint the link.",
+  ].join("\n");
+}
+
+async function proposeIntake(
+  orgId: string,
+  userId: string,
+  intake: IntakeFields,
+  params: AgentTurnParams
+): Promise<string> {
+  const draft = await buildIntakeDraft(intake, params);
+  if (!params.convoKey) {
+    // No conversation to hold a draft (e.g. a non-Slack caller) — mint directly.
+    return finalizeIntake(orgId, userId, draft, params);
+  }
+  await savePendingIntake(params.convoKey, draft as unknown as Record<string, unknown>);
+  return previewIntake(draft);
+}
+
+async function editIntake(route: RouterResult, params: AgentTurnParams): Promise<string> {
+  if (!params.convoKey) return "I lost track of that draft — say *create an intake link for <role>* to start over.";
+  const draft = asDraft(await loadPendingIntake(params.convoKey));
+  if (!draft) return "I don't have a draft link in progress. Say *create an intake link for <role>* to start one.";
+  const merged = mergeEdit(draft, route.intake ?? {});
+  await savePendingIntake(params.convoKey, merged as unknown as Record<string, unknown>);
+  return previewIntake(merged);
+}
+
+async function confirmIntake(orgId: string, userId: string, params: AgentTurnParams): Promise<string> {
+  if (!params.convoKey) return "I lost track of that draft — say *create an intake link for <role>* to start over.";
+  const draft = asDraft(await loadPendingIntake(params.convoKey));
+  if (!draft) return "Nothing to confirm — say *create an intake link for <role>* to start one.";
+  const out = await finalizeIntake(orgId, userId, draft, params);
+  await clearPendingIntake(params.convoKey);
+  return out;
+}
+
+/** Mint the JD from a confirmed draft — the same complete payload a web JD gets. */
+async function finalizeIntake(
+  orgId: string,
+  userId: string,
+  d: IntakeDraft,
+  params: AgentTurnParams
+): Promise<string> {
+  const result = await createJd(orgId, userId, {
+    title: d.title,
+    seniority: d.seniority,
+    role_category: d.role_category,
+    tech_stack: d.tech_stack,
+    location_type: d.location_type,
+    employment_type: d.employment_type,
+    yoe_required: d.yoe_required,
+    work_auth_us_required: d.work_auth_us_required,
+    work_auth_eu_required: d.work_auth_eu_required,
+    work_auth_provided: d.work_auth_provided,
     role_fit: {
-      title: cleanTitle(title),
-      primary,
-      secondary,
-      tertiary,
-      one_liner: buildOneLiner(title, primary, secondary, tertiary),
+      title: cleanTitle(d.title),
+      primary: d.primary,
+      secondary: d.secondary,
+      tertiary: d.tertiary,
+      one_liner: buildOneLiner(d.title, d.primary, d.secondary, d.tertiary),
     },
   });
   if (!result.ok) {
@@ -313,16 +449,16 @@ async function createIntake(
     teamId: params.teamId,
     channel: params.channel,
     slackUserId: params.slackUserId,
-    detail: { action: "create_intake", jobId: result.jobId, title: intake.title ?? "" },
+    detail: { action: "create_intake", jobId: result.jobId, title: d.title },
   });
 
   const link = `${APP_URL}/candidate?jobId=${result.jobId}`;
   return [
-    `Here's the intake link for *${title}* — candidates apply and get auto-screened, no extra setup:`,
+    `✅ Done — intake link for *${d.title}*:`,
     link,
     "",
     "Paste-ready for your network:",
-    `> We're hiring a ${title}! Apply here and you'll hear back fast 👇`,
+    `> We're hiring a ${d.title}! Apply here and you'll hear back fast 👇`,
     `> ${link}`,
   ].join("\n");
 }
