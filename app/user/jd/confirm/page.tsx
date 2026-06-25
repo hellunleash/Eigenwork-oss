@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { cleanTitle, buildOneLiner } from "@/lib/jd-role-fit";
 
 type JDForm = {
   title: string;
@@ -23,40 +24,6 @@ function parseCommaSeparated(value: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-function cleanTitle(title: string): string {
-  return (title || "").replace(/\s*\[[^\]]*\]\s*/g, " ").trim().replace(/\s+/g, " ") || "";
-}
-
-function buildOneLiner(
-  title: string,
-  primary: string[],
-  secondary: string[],
-  tertiary: string[]
-): string {
-  const seen = new Set<string>();
-  const primaryDisplay = primary.filter((x) => {
-    if (seen.has(x)) return false;
-    seen.add(x);
-    return true;
-  });
-  const secondaryDisplay = secondary.filter((x) => {
-    if (seen.has(x)) return false;
-    seen.add(x);
-    return true;
-  });
-  const tertiaryDisplay = tertiary.filter((x) => {
-    if (seen.has(x)) return false;
-    seen.add(x);
-    return true;
-  });
-  const parts: string[] = [];
-  if (primaryDisplay.length) parts.push(primaryDisplay.join(", "));
-  if (secondaryDisplay.length) parts.push(secondaryDisplay.join(", "));
-  if (tertiaryDisplay.length) parts.push(tertiaryDisplay.join(", "));
-  const suffix = parts.length ? ` (${parts.join(" | ")})` : "";
-  return cleanTitle(title) + suffix;
 }
 
 function JDConfirmContent() {

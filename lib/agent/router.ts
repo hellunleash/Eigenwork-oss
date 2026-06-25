@@ -16,6 +16,7 @@ export type Intent =
   | "create_intake"
   | "move_stage"
   | "draft_outreach"
+  | "list_roles"
   | "help"
   | "clarify";
 
@@ -70,7 +71,8 @@ Intents:
 - "describe": tell me about ONE candidate. Set candidateIds (exactly one).
 - "compare": compare TWO OR MORE candidates ("who is better and why"). Set candidateIds (two or more).
 - "explain": explain a specific aspect of ONE candidate (a flag, a signal, the score). Set candidateIds (one) and topic.
-- "find": find / list / rank candidates for a role or a query. Set jobId if a named role matches the jobs list, otherwise set roleQuery.
+- "find": find / list / rank CANDIDATES for a role or a query. Set jobId if a named role matches the jobs list, otherwise set roleQuery.
+- "list_roles": the recruiter asks about their ROLES/JOBS themselves — "how many roles do I have", "list my roles", "what roles/positions are open", "my pipeline". This is about jobs, NOT candidates. No id resolution needed.
 - "create_intake": the recruiter wants an application/intake link for a NEW role. Extract intake:{title, seniority, location_type, employment_type, yoe_required} from the text (any subset you can infer; omit unknown fields).
 - "move_stage": the recruiter wants to move/advance/reject candidate(s) in the pipeline. Set candidateIds (one or more) and targetStage (exactly one of: interviewing, offer, hired, rejected, withdrawn). Map natural language: "move to interview" / "shortlist for interview" → interviewing; "extend an offer" / "send offer" → offer; "mark hired" / "hire them" → hired; "reject" / "pass on" / "interview failed" → rejected; "they withdrew" / "offer declined" → withdrawn. For "interview failed" also set outcome:"failed".
 - "draft_outreach": the recruiter wants a personalized outreach email drafted to candidate(s). Set candidateIds (one or more).

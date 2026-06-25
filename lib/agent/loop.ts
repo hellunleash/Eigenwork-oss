@@ -4,12 +4,15 @@ import {
   getCandidateDetail,
   type CandidateDetail,
   type CandidateLite,
+  type JobLite,
 } from "@/lib/agent/data";
 import { routeMessage, type RouterResult, type IntakeFields } from "@/lib/agent/router";
 import { synthDescribe, synthCompare, synthExplain, candidateFacts } from "@/lib/agent/synthesis";
 import { judgeAnswer } from "@/lib/agent/judge";
 import { scrubJargon } from "@/lib/agent/jargon";
 import { createJd } from "@/lib/jd";
+import { parseJdText } from "@/lib/jd-parse";
+import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
 import { STAGES } from "@/lib/stage";
 import { composeOutreach, buildMailto } from "@/lib/outreach";
 import { logAgentRun } from "@/lib/agent/audit";
@@ -57,7 +60,7 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply>
     detail: { intent: route.intent, candidateIds: route.candidateIds ?? [], jobId: route.jobId ?? null },
   });
 
-  const reply = await executeRoute(orgId, userId, route, roster, text, params);
+  const reply = await executeRoute(orgId, userId, route, roster, jobs, text, params);
 
   // Persist the turn so the NEXT message can resolve follow-ups against it.
   if (params.convoKey) {
@@ -77,6 +80,7 @@ async function executeRoute(
   userId: string,
   route: RouterResult,
   roster: CandidateLite[],
+  jobs: JobLite[],
   text: string,
   params: AgentTurnParams
 ): Promise<AgentReply> {
@@ -85,6 +89,8 @@ async function executeRoute(
       return { text: helpText() };
     case "clarify":
       return { text: route.clarifyQuestion || "Which candidate do you mean? Tell me the name as it appears in your pipeline." };
+    case "list_roles":
+      return { text: listRoles(jobs) };
     case "find":
       return { text: findCandidates(route, roster) };
     case "create_intake":
@@ -256,12 +262,41 @@ async function createIntake(
   intake: IntakeFields,
   params: AgentTurnParams
 ): Promise<string> {
+  // Generate the SAME structured JD the web flow does — parse the recruiter's
+  // request into role anchors, then build role_fit + one_liner — so a Slack-minted
+  // intake link has a complete role_fit and work_auth and /api/jd/match can score
+  // it. Best-effort: if parse fails, fall back to the router's extracted fields.
+  let parsed: Awaited<ReturnType<typeof parseJdText>> | null = null;
+  try {
+    parsed = await parseJdText(params.text);
+  } catch {
+    parsed = null;
+  }
+  const title = intake.title || parsed?.title || "New role";
+  const primary = parsed?.primary ?? [];
+  const secondary = parsed?.secondary ?? [];
+  const tertiary = parsed?.tertiary ?? [];
+
   const result = await createJd(orgId, userId, {
-    title: intake.title ?? "",
-    seniority: intake.seniority ?? "",
-    location_type: intake.location_type ?? "",
-    employment_type: intake.employment_type ?? "",
-    yoe_required: intake.yoe_required ?? "",
+    title,
+    seniority: intake.seniority ?? parsed?.seniority ?? "",
+    role_category: parsed?.role_category ?? "",
+    tech_stack: parsed?.tech_stack ?? [],
+    location_type: intake.location_type ?? parsed?.location_type ?? "",
+    employment_type: intake.employment_type ?? parsed?.employment_type ?? "",
+    yoe_required: intake.yoe_required ?? parsed?.yoe_required ?? "",
+    // Work-auth defaults to "no specific requirement" — same as a web JD where the
+    // recruiter leaves the boxes unchecked. They can refine it on the dashboard.
+    work_auth_us_required: false,
+    work_auth_eu_required: false,
+    work_auth_provided: false,
+    role_fit: {
+      title: cleanTitle(title),
+      primary,
+      secondary,
+      tertiary,
+      one_liner: buildOneLiner(title, primary, secondary, tertiary),
+    },
   });
   if (!result.ok) {
     if (result.error === "role_limit_reached") {
@@ -282,25 +317,34 @@ async function createIntake(
   });
 
   const link = `${APP_URL}/candidate?jobId=${result.jobId}`;
-  const title = intake.title || "your new role";
   return [
     `Here's the intake link for *${title}* — candidates apply and get auto-screened, no extra setup:`,
     link,
     "",
     "Paste-ready for your network:",
-    `> We're hiring${intake.title ? ` a ${intake.title}` : ""}! Apply here and you'll hear back fast 👇`,
+    `> We're hiring a ${title}! Apply here and you'll hear back fast 👇`,
     `> ${link}`,
   ].join("\n");
 }
 
+function listRoles(jobs: JobLite[]): string {
+  if (jobs.length === 0) {
+    return "You don't have any roles open yet. Say *create an intake link for <role>* and I'll mint one you can share.";
+  }
+  const lines = jobs.map(
+    (j, i) => `${i + 1}. *${j.title || "Untitled role"}*${j.seniority ? ` — ${j.seniority}` : ""}`
+  );
+  return [`You have *${jobs.length}* role${jobs.length === 1 ? "" : "s"} in your pipeline:`, ...lines].join("\n");
+}
+
 function helpText(): string {
   return [
-    "👋 I'm EigenBot. I answer straight from your screened candidates — no dashboard needed. Try:",
-    "• *Tell me about <candidate>*",
-    "• *Why is <A> stronger than <B>?*",
-    "• *Who are my top candidates for <role>?*",
-    "• *Move <candidate> to interview* / *reject <candidate>*",
-    "• *Draft outreach to <candidate>*",
-    "• *Create an intake link for a senior backend role*",
+    "👋 I'm EigenBot — run your whole hiring loop right here, no dashboard needed. Try:",
+    "📨  *Create an intake link for a senior backend role* — share it anywhere to collect applicants",
+    "📋  *How many roles do I have?*  ·  *List my roles*",
+    "🔎  *Who are my top candidates for <role>?*",
+    "👤  *Tell me about <candidate>*  ·  *Why is <A> stronger than <B>?*",
+    "✅  *Move <candidate> to interview*  ·  *Reject <candidate>*",
+    "✉️  *Draft outreach to <candidate>*",
   ].join("\n");
 }
