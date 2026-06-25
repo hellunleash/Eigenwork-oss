@@ -32,6 +32,57 @@ function normalizeLocationType(loc: string): LocationType {
   return 'Remote';
 }
 
+// Plain-English labels for the work-auth checkboxes. Work authorization is about
+// LEGAL right to work, not where the role is done (docs/work-auth-matching.md).
+// The stored values stay the AuthRegion enum ('US' | 'EU' | 'Remote Global') so no
+// data migration is needed — 'Remote Global' is the legacy value now meaning
+// "neither US nor EU." Changing the label only affects what the candidate reads.
+const AUTH_REGION_LABELS: Record<AuthRegion, { label: string; hint?: string }> = {
+  US: { label: 'United States' },
+  EU: { label: 'European Union' },
+  'Remote Global': {
+    label: 'Neither — I work remotely from my own country',
+    hint: 'No US or EU authorization, and no sponsorship needed.',
+  },
+};
+
+// Turn the recruiter's work-auth requirement into a short read-only summary the
+// candidate sees before answering. Mirrors workAuthMatch(): `provided` (the
+// employer sponsors) opens the role to everyone; otherwise us/eu gate matching.
+function workAuthRequirementSummary(
+  wa: { us_required: boolean; eu_required: boolean; provided: boolean } | null
+): { headline: string; detail: string } {
+  if (!wa) {
+    return {
+      headline: 'No specific work authorization required',
+      detail: "Let the employer know where you're authorized to work below.",
+    };
+  }
+  if (wa.provided) {
+    return {
+      headline: 'This employer sponsors work authorization',
+      detail:
+        "You can apply no matter where you're currently authorized to work — the employer will handle the visa or sponsorship.",
+    };
+  }
+  const regions: string[] = [];
+  if (wa.us_required) regions.push('the United States');
+  if (wa.eu_required) regions.push('the European Union');
+  if (regions.length === 0) {
+    return {
+      headline: 'No specific work authorization required',
+      detail: "Let the employer know where you're authorized to work below.",
+    };
+  }
+  return {
+    // workAuthMatch() ANDs us_required + eu_required, so a both-set (legacy) role
+    // genuinely needs both regions. The radio on the JD side prevents this combo
+    // for new roles, where this is always a single region.
+    headline: `Requires authorization to work in ${regions.join(' and ')}`,
+    detail: 'Check the matching region below so the employer can see your status.',
+  };
+}
+
 function CandidatePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -81,6 +132,9 @@ function CandidatePageContent() {
   const [linkExpired, setLinkExpired] = useState(false);
   const [linkPaused, setLinkPaused] = useState(false);
   const [jdRoleFitOneLiner, setJdRoleFitOneLiner] = useState<string | null>(null);
+  // The recruiter's work-authorization requirement (from the JD), shown read-only
+  // so the candidate can see what the role expects before answering below.
+  const [jdWorkAuth, setJdWorkAuth] = useState<{ us_required: boolean; eu_required: boolean; provided: boolean } | null>(null);
   const workTypeLocked = Boolean(jobIdFromUrl && (jdLoading || workTypeLockedByJd));
   const locationLocked = Boolean(jobIdFromUrl && (jdLoading || locationLockedByJd));
 
@@ -99,6 +153,11 @@ function CandidatePageContent() {
         submissionCap?: number;
         appliedCount?: number;
         screensRemaining?: number;
+        work_auth_requirement?: {
+          us_required?: boolean;
+          eu_required?: boolean;
+          provided?: boolean;
+        } | null;
         role_fit?: {
           title?: string;
           primary?: string[];
@@ -127,6 +186,17 @@ function CandidatePageContent() {
         // Store JD role fit one-liner
         if (jd.role_fit && typeof jd.role_fit === 'object' && jd.role_fit.one_liner) {
           setJdRoleFitOneLiner(String(jd.role_fit.one_liner));
+        }
+
+        // Store the recruiter's work-authorization requirement so the candidate
+        // can see what the role expects (rendered read-only in the section below).
+        const wa = jd.work_auth_requirement;
+        if (wa && typeof wa === 'object') {
+          setJdWorkAuth({
+            us_required: Boolean(wa.us_required),
+            eu_required: Boolean(wa.eu_required),
+            provided: Boolean(wa.provided),
+          });
         }
 
         // Always lock work type and location to JD values when applying via job intake link
@@ -220,9 +290,14 @@ function CandidatePageContent() {
   };
 
   const toggleAuthRegion = (region: AuthRegion) => {
-    setAuthRegions(prev =>
-      prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]
-    );
+    setAuthRegions(prev => {
+      if (prev.includes(region)) return prev.filter(r => r !== region);
+      // "Neither — I work remotely from my own country" ('Remote Global') is
+      // mutually exclusive with US/EU: you either hold US/EU authorization or you
+      // don't. Selecting it clears US/EU; selecting US/EU clears it.
+      if (region === 'Remote Global') return ['Remote Global'];
+      return [...prev.filter(r => r !== 'Remote Global'), region];
+    });
   };
 
   // File upload handlers
@@ -400,6 +475,11 @@ function CandidatePageContent() {
       </div>
     );
   }
+
+  // Read-only summary of what the recruiter requires for this role (shown above
+  // the candidate's own selection so they aren't answering blind).
+  const workAuthSummary = workAuthRequirementSummary(jdWorkAuth);
+  const employerSponsors = Boolean(jdWorkAuth?.provided);
 
   return (
     <div className="min-h-screen bg-white dark:bg-[#0a0a0e] py-16 px-4 transition-colors duration-300">
@@ -646,29 +726,77 @@ function CandidatePageContent() {
 
           {/* Section 2: Work Authorization */}
           <div className="space-y-4">
-            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-6">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
               Work Authorization
             </h2>
-            
-            <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-3">
-                I am authorized to work in:
+
+            {/* What this role requires — read-only, pulled from the recruiter's JD
+                so the candidate can see what's expected before answering. */}
+            <div
+              className={`flex items-start gap-3 rounded-xl border p-4 ${
+                employerSponsors
+                  ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/20 dark:bg-emerald-500/[0.08]'
+                  : 'border-gray-200 bg-gray-50 dark:border-white/[0.06] dark:bg-white/[0.02]'
+              }`}
+            >
+              <svg
+                className={`w-5 h-5 shrink-0 mt-0.5 ${
+                  employerSponsors ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'
+                }`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <div>
+                <p
+                  className={`text-sm font-medium ${
+                    employerSponsors ? 'text-emerald-900 dark:text-emerald-100' : 'text-gray-900 dark:text-gray-100'
+                  }`}
+                >
+                  {workAuthSummary.headline}
+                </p>
+                <p
+                  className={`text-sm mt-0.5 ${
+                    employerSponsors ? 'text-emerald-800 dark:text-emerald-200/90' : 'text-gray-600 dark:text-gray-400'
+                  }`}
+                >
+                  {workAuthSummary.detail}
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-1">
+              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                Where are you authorized to work? <span className="text-red-600">*</span>
               </label>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                Select all that apply. This shows the employer whether your work authorization fits the role.
+              </p>
               <div className="space-y-3">
-                {(['US', 'EU', 'Remote Global'] as AuthRegion[]).map(region => (
-                  <label
-                    key={region}
-                    className="flex items-center space-x-3 cursor-pointer group"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={authRegions.includes(region)}
-                      onChange={() => toggleAuthRegion(region)}
-                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.2] rounded focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-offset-0"
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100">{region}</span>
-                  </label>
-                ))}
+                {(['US', 'EU', 'Remote Global'] as AuthRegion[]).map(region => {
+                  const { label, hint } = AUTH_REGION_LABELS[region];
+                  return (
+                    <label
+                      key={region}
+                      className="flex items-start gap-3 cursor-pointer group"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={authRegions.includes(region)}
+                        onChange={() => toggleAuthRegion(region)}
+                        className="mt-0.5 w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.2] rounded focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-offset-0"
+                      />
+                      <span className="text-sm">
+                        <span className="block text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100">{label}</span>
+                        {hint && (
+                          <span className="block text-xs text-gray-400 dark:text-gray-500 mt-0.5">{hint}</span>
+                        )}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -13,6 +13,13 @@ import { scrubJargon } from "@/lib/agent/jargon";
 import { createJd } from "@/lib/jd";
 import { parseJdText } from "@/lib/jd-parse";
 import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
+import {
+  WORK_AUTH_OPTIONS,
+  LOCATION_TYPES,
+  EMPLOYMENT_TYPES,
+  workAuthChoiceToBooleans,
+  type WorkAuthChoice,
+} from "@/lib/jd-options";
 import { STAGES } from "@/lib/stage";
 import { composeOutreach, buildMailto } from "@/lib/outreach";
 import { logAgentRun } from "@/lib/agent/audit";
@@ -54,6 +61,36 @@ export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply>
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
   const history = params.convoKey ? await loadConvo(params.convoKey) : [];
   const pendingIntake = params.convoKey ? await loadPendingIntake(params.convoKey) : null;
+
+  // Confirm-and-fill fast path: when a draft is waiting on ONE specific field
+  // (work_auth → location → employment), interpret a numbered/labelled reply
+  // deterministically — no LLM, no misclassification. Anything we can't read as
+  // a pick for that field (a free-text edit, "create it", a new request) falls
+  // through to the router below.
+  if (params.convoKey && pendingIntake) {
+    const awaiting = pendingIntake._awaiting;
+    const base = asDraft(pendingIntake);
+    if (typeof awaiting === "string" && (GAP_ORDER as readonly string[]).includes(awaiting) && base) {
+      const updated = applyGapAnswer(base, awaiting as Gap, text);
+      if (updated) {
+        await logAgentRun({
+          orgId,
+          userId,
+          surface: "slack",
+          kind: "tool_call",
+          teamId: params.teamId,
+          channel: params.channel,
+          slackUserId: params.slackUserId,
+          detail: { intent: "edit_intake", gap: awaiting },
+        });
+        const replyText = await respondWithGapOrConfirm(updated, params);
+        const summary = replyText.length > 300 ? `${replyText.slice(0, 300)}…` : replyText;
+        await saveTurn(params.convoKey, { role: "user", text }, { role: "bot", text: summary });
+        return { text: replyText };
+      }
+    }
+  }
+
   const route = await routeMessage(text, jobs, roster, history, pendingIntake);
 
   await logAgentRun({
@@ -287,6 +324,10 @@ type IntakeDraft = {
   work_auth_us_required: boolean;
   work_auth_eu_required: boolean;
   work_auth_provided: boolean;
+  /** True once work-auth has been settled — either the recruiter stated a
+   *  requirement up front, or they picked an option (incl. "none") when asked.
+   *  Distinguishes a deliberate "none" (all booleans false) from "not asked yet". */
+  work_auth_answered: boolean;
   primary: string[];
   secondary: string[];
   tertiary: string[];
@@ -301,6 +342,12 @@ async function buildIntakeDraft(intake: IntakeFields, params: AgentTurnParams): 
   } catch {
     parsed = null;
   }
+  // The JD parser never produces work-auth, so it's "answered" up front only if
+  // the recruiter's own message stated one (the router sets any work_auth_* key).
+  const workAuthStated =
+    intake.work_auth_us_required !== undefined ||
+    intake.work_auth_eu_required !== undefined ||
+    intake.work_auth_provided !== undefined;
   return {
     title: intake.title || parsed?.title || "New role",
     seniority: intake.seniority ?? parsed?.seniority ?? "",
@@ -312,6 +359,7 @@ async function buildIntakeDraft(intake: IntakeFields, params: AgentTurnParams): 
     work_auth_us_required: Boolean(intake.work_auth_us_required),
     work_auth_eu_required: Boolean(intake.work_auth_eu_required),
     work_auth_provided: Boolean(intake.work_auth_provided),
+    work_auth_answered: workAuthStated,
     primary: parsed?.primary ?? [],
     secondary: parsed?.secondary ?? [],
     tertiary: parsed?.tertiary ?? [],
@@ -333,6 +381,7 @@ function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
     work_auth_us_required: Boolean(p.work_auth_us_required),
     work_auth_eu_required: Boolean(p.work_auth_eu_required),
     work_auth_provided: Boolean(p.work_auth_provided),
+    work_auth_answered: Boolean(p.work_auth_answered),
     primary: a("primary"),
     secondary: a("secondary"),
     tertiary: a("tertiary"),
@@ -341,6 +390,10 @@ function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
 
 /** Merge the router's edit (only the fields it returned) onto the draft. */
 function mergeEdit(d: IntakeDraft, intake: IntakeFields): IntakeDraft {
+  const workAuthTouched =
+    intake.work_auth_us_required !== undefined ||
+    intake.work_auth_eu_required !== undefined ||
+    intake.work_auth_provided !== undefined;
   return {
     ...d,
     ...(intake.title ? { title: intake.title } : {}),
@@ -351,17 +404,105 @@ function mergeEdit(d: IntakeDraft, intake: IntakeFields): IntakeDraft {
     ...(intake.work_auth_us_required !== undefined ? { work_auth_us_required: Boolean(intake.work_auth_us_required) } : {}),
     ...(intake.work_auth_eu_required !== undefined ? { work_auth_eu_required: Boolean(intake.work_auth_eu_required) } : {}),
     ...(intake.work_auth_provided !== undefined ? { work_auth_provided: Boolean(intake.work_auth_provided) } : {}),
+    ...(workAuthTouched ? { work_auth_answered: true } : {}),
   };
 }
 
-function previewIntake(d: IntakeDraft): string {
+/**
+ * The three fields the recruiter PICKS (not free text), in the order we ask for
+ * any the JD didn't already provide. Work-auth is never in a JD's parsed output,
+ * so it's asked unless the recruiter stated it; location/employment are asked
+ * only when the parser left them blank. Everything else stays autofilled.
+ */
+const GAP_ORDER = ["work_auth", "location_type", "employment_type"] as const;
+type Gap = (typeof GAP_ORDER)[number];
+
+/** First field still needing a pick, in GAP_ORDER, or null when the draft is complete. */
+function firstGap(d: IntakeDraft): Gap | null {
+  if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
+    return "work_auth";
+  }
+  if (!d.location_type.trim()) return "location_type";
+  if (!d.employment_type.trim()) return "employment_type";
+  return null;
+}
+
+/** The numbered question for a gap — options come straight from lib/jd-options
+ *  (same choices the web confirm page shows), so the recruiter just replies a number. */
+function askGap(g: Gap): string {
+  if (g === "work_auth") {
+    return [
+      "🛂 What *work authorization* does this role require? Reply with the number:",
+      ...WORK_AUTH_OPTIONS.map((o, i) => `${i + 1}. ${o.title}`),
+    ].join("\n");
+  }
+  if (g === "location_type") {
+    return [
+      "📍 What's the *work location*? Reply with the number:",
+      ...LOCATION_TYPES.map((o, i) => `${i + 1}. ${o}`),
+    ].join("\n");
+  }
+  return [
+    "💼 What's the *employment type*? Reply with the number:",
+    ...EMPLOYMENT_TYPES.map((o, i) => `${i + 1}. ${o}`),
+  ].join("\n");
+}
+
+/** Interpret a reply to a gap question as a pick (a number, or the option label).
+ *  Returns the updated draft, or null if it isn't a recognizable answer for that
+ *  field (so the caller falls back to the LLM router for edits/confirm/cancel). */
+function applyGapAnswer(d: IntakeDraft, gap: Gap, text: string): IntakeDraft | null {
+  const t = text.trim().toLowerCase();
+  const numMatch = t.match(/^#?\s*(\d+)/);
+  const n = numMatch ? parseInt(numMatch[1], 10) : NaN;
+
+  if (gap === "work_auth") {
+    let choice: WorkAuthChoice | null = null;
+    if (n >= 1 && n <= WORK_AUTH_OPTIONS.length) choice = WORK_AUTH_OPTIONS[n - 1].value;
+    else if (/sponsor|visa/.test(t)) choice = "sponsor";
+    else if (/\bus\b|u\.s\.|united states|america/.test(t)) choice = "us";
+    else if (/\beu\b|europe/.test(t)) choice = "eu";
+    else if (/\b(none|no|not required|open|anyone|any|n\/a)\b/.test(t)) choice = "none";
+    if (!choice) return null;
+    return { ...d, ...workAuthChoiceToBooleans(choice), work_auth_answered: true };
+  }
+
+  if (gap === "location_type") {
+    let v: string | null = null;
+    if (n >= 1 && n <= LOCATION_TYPES.length) v = LOCATION_TYPES[n - 1];
+    else if (/remote/.test(t)) v = "Remote";
+    else if (/hybrid/.test(t)) v = "Hybrid";
+    else if (/on.?site|onsite|in.?office/.test(t)) v = "On-site";
+    if (!v) return null;
+    return { ...d, location_type: v };
+  }
+
+  // employment_type
+  let v: string | null = null;
+  if (n >= 1 && n <= EMPLOYMENT_TYPES.length) v = EMPLOYMENT_TYPES[n - 1];
+  else if (/full.?time|\bft\b/.test(t)) v = "Full-time";
+  else if (/intern/.test(t)) v = "Intern";
+  else if (/contract/.test(t)) v = "Contract";
+  if (!v) return null;
+  return { ...d, employment_type: v };
+}
+
+/** The running draft summary — what the JD autofilled, with unfilled picks
+ *  flagged. No trailing instruction; the caller appends the next gap question
+ *  or the confirm footer. */
+function draftSummary(d: IntakeDraft): string {
   const skills = [...d.primary, ...d.secondary, ...d.tertiary];
-  const authBits: string[] = [];
-  if (d.work_auth_us_required) authBits.push("US required");
-  if (d.work_auth_eu_required) authBits.push("EU required");
-  if (d.work_auth_provided) authBits.push("sponsorship provided");
-  const auth = authBits.length ? authBits.join(", ") : "none required (default)";
   const set = (v: string) => (v && v.trim() ? v : "_not set_");
+  let auth: string;
+  if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
+    auth = "_to be set_";
+  } else {
+    const bits: string[] = [];
+    if (d.work_auth_us_required) bits.push("US required");
+    if (d.work_auth_eu_required) bits.push("EU required");
+    if (d.work_auth_provided) bits.push("sponsorship provided");
+    auth = bits.length ? bits.join(", ") : "none required";
+  }
   return [
     `📋 Draft intake link — *${d.title}*`,
     `• Seniority: ${set(d.seniority)}`,
@@ -370,9 +511,22 @@ function previewIntake(d: IntakeDraft): string {
     `• Experience: ${set(d.yoe_required)}`,
     `• Work auth: ${auth}`,
     `• Skills: ${skills.length ? skills.join(", ") : "_none detected_"}`,
-    "",
-    "Reply to change anything (e.g. *“require US work auth”*, *“hybrid”*, *“5+ years”*), or say *create it* to mint the link.",
   ].join("\n");
+}
+
+const CONFIRM_FOOTER =
+  "Reply to change anything (e.g. *“senior”*, *“5+ years”*), or say *create it* to mint the link.";
+
+/** Persist the draft and respond: ask the next missing pick, or — when nothing's
+ *  missing — show the final summary and invite confirmation. `_awaiting` carries
+ *  which field a bare-number reply should fill ("" once complete; the map is
+ *  deep-merged on save, so it's overwritten, never left stale). */
+async function respondWithGapOrConfirm(draft: IntakeDraft, params: AgentTurnParams): Promise<string> {
+  const gap = firstGap(draft);
+  const record: Record<string, unknown> = { ...(draft as unknown as Record<string, unknown>), _awaiting: gap ?? "" };
+  if (params.convoKey) await savePendingIntake(params.convoKey, record);
+  const tail = gap ? askGap(gap) : CONFIRM_FOOTER;
+  return [draftSummary(draft), "", tail].join("\n");
 }
 
 async function proposeIntake(
@@ -386,8 +540,7 @@ async function proposeIntake(
     // No conversation to hold a draft (e.g. a non-Slack caller) — mint directly.
     return finalizeIntake(orgId, userId, draft, params);
   }
-  await savePendingIntake(params.convoKey, draft as unknown as Record<string, unknown>);
-  return previewIntake(draft);
+  return respondWithGapOrConfirm(draft, params);
 }
 
 async function editIntake(route: RouterResult, params: AgentTurnParams): Promise<string> {
@@ -395,8 +548,7 @@ async function editIntake(route: RouterResult, params: AgentTurnParams): Promise
   const draft = asDraft(await loadPendingIntake(params.convoKey));
   if (!draft) return "I don't have a draft link in progress. Say *create an intake link for <role>* to start one.";
   const merged = mergeEdit(draft, route.intake ?? {});
-  await savePendingIntake(params.convoKey, merged as unknown as Record<string, unknown>);
-  return previewIntake(merged);
+  return respondWithGapOrConfirm(merged, params);
 }
 
 async function confirmIntake(orgId: string, userId: string, params: AgentTurnParams): Promise<string> {

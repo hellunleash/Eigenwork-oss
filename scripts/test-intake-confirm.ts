@@ -1,8 +1,10 @@
 #!/usr/bin/env -S npx tsx
 // scripts/test-intake-confirm.ts — exercise the create_intake confirm-and-fill flow:
-// create -> preview (no JD minted), edit by reply -> updated preview, then verify
-// "create it" routes to confirm_intake and "cancel" to cancel_intake. Does NOT mint
-// (no createJd) so no junk role is written; cleans up the throwaway draft doc.
+// create -> the bot asks only for the missing picks (work_auth -> location ->
+// employment) as numbered options, answered by replying a number; whatever the JD
+// supplied stays autofilled. Then verify "create it" routes to confirm_intake and
+// "cancel" to cancel_intake. Does NOT mint (no createJd) so no junk role is
+// written; cleans up the throwaway draft doc.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -50,14 +52,19 @@ async function main(): Promise<void> {
   const convoKey = `TEST:intake:${Date.now()}`;
   const turn = (text: string) => runAgentTurn({ orgId, userId, text, convoKey } as Parameters<typeof runAgentTurn>[0]);
 
-  orig("\n👤 create an intake link for a senior backend engineer with Go and Postgres, remote");
-  orig("🤖 " + (await turn("create an intake link for a senior backend engineer with Go and Postgres, remote")).text + "\n");
+  // No work-auth / location / employment in the request — the bot should ask for
+  // each as a numbered question, in order, and we answer with bare numbers.
+  orig("\n👤 create an intake link for a senior backend engineer with Go and Postgres");
+  orig("🤖 " + (await turn("create an intake link for a senior backend engineer with Go and Postgres")).text + "\n");
 
-  orig("👤 require US work auth");
-  orig("🤖 " + (await turn("require US work auth")).text + "\n");
+  orig("👤 2   (work auth: US)");
+  orig("🤖 " + (await turn("2")).text + "\n");
 
-  orig("👤 hybrid, 4+ years");
-  orig("🤖 " + (await turn("hybrid, 4+ years")).text + "\n");
+  orig("👤 1   (location: Remote)");
+  orig("🤖 " + (await turn("1")).text + "\n");
+
+  orig("👤 1   (employment: Full-time)");
+  orig("🤖 " + (await turn("1")).text + "\n");
 
   // Verify confirm/cancel routing WITHOUT minting (don't execute the write).
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
@@ -65,7 +72,9 @@ async function main(): Promise<void> {
   const r1 = await routeMessage("create it", jobs, roster, [], pending);
   const r2 = await routeMessage("actually cancel that", jobs, roster, [], pending);
   orig(`routing with draft pending:  "create it" -> ${r1.intent}   ·   "actually cancel that" -> ${r2.intent}`);
-  orig(`pending draft work_auth_us_required = ${pending?.work_auth_us_required}  ·  location_type = ${pending?.location_type}`);
+  orig(
+    `pending draft work_auth_us_required = ${pending?.work_auth_us_required}  ·  location_type = ${pending?.location_type}  ·  employment_type = ${pending?.employment_type}  ·  _awaiting = ${JSON.stringify(pending?._awaiting)}`
+  );
 
   await getAdminDb().collection("agent_threads").doc(convoKey).delete().catch(() => {});
   console.log = orig;

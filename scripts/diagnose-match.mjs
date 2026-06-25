@@ -57,13 +57,6 @@ function toArray(v) {
   if (v == null) return [];
   return Array.isArray(v) ? v : [v];
 }
-function normalizeLocation(s) {
-  const t = (s || "").trim().toLowerCase();
-  if (t === "on-site" || t === "onsite") return "onsite";
-  if (t === "remote") return "remote";
-  if (t === "hybrid") return "hybrid";
-  return (s || "").trim().toLowerCase();
-}
 function getJDOneLiner(jd) {
   const rf = jd.role_fit;
   if (rf && typeof rf === "object" && "one_liner" in rf) return String(rf.one_liner ?? "").trim();
@@ -76,16 +69,14 @@ function getCandOneLiner(c) {
   if (rf && typeof rf === "object" && "one_liner" in rf) return String(rf.one_liner ?? "").trim();
   return "";
 }
-// workAuthMatch WITH the missing-data fix applied.
-function workAuthMatch(jobAuth, jobLocationTypes, candidateAuthRegions) {
+// Mirror of lib/match.ts workAuthMatch. Work auth is decoupled from work location
+// (docs/work-auth-matching.md): the gate checks only legal authorization, and the
+// "Neither / Remote Global" answer carries no us/eu token so it fails US/EU-required
+// roles and passes No-requirement / Sponsor roles.
+function workAuthMatch(jobAuth, candidateAuthRegions) {
   if (jobAuth?.provided) return true;
   const regions = toArray(candidateAuthRegions).map((r) => String(r).toLowerCase());
   if (regions.length === 0) return true; // no data -> don't reject
-  const hasRemoteGlobal = regions.some((r) => r.includes("remote") && r.includes("global"));
-  if (hasRemoteGlobal) {
-    const job = jobLocationTypes.map(normalizeLocation);
-    if (!job.includes("remote")) return false;
-  }
   if (jobAuth?.us_required && !regions.some((r) => r.includes("us"))) return false;
   if (jobAuth?.eu_required && !regions.some((r) => r.includes("eu"))) return false;
   return true;
@@ -146,7 +137,6 @@ async function main() {
   const jd = jdSnap.data() ?? {};
   const jdOneLiner = getJDOneLiner(jd);
   const jobAuth = jd.work_auth_requirement ?? {};
-  const jobLocationTypes = toArray(jd.location_type).map(String);
   console.log("\n[1] JD");
   console.log(`${INFO} role_fit one-liner: ${jdOneLiner ? `"${jdOneLiner}"` : "(EMPTY → role-fit fails open, everyone MATCH)"}`);
   console.log(`${INFO} work_auth_requirement: ${JSON.stringify(jobAuth)}`);
@@ -197,7 +187,7 @@ async function main() {
     const label = labels ? labels[i] : "?";
     const roleOk = labels ? label.startsWith("MATCH") || label.startsWith("ADJACENT") : true;
     const authReg = c?.matchData?.authRegions;
-    const authOk = workAuthMatch(jobAuth, jobLocationTypes, authReg);
+    const authOk = workAuthMatch(jobAuth, authReg);
     const inCache = cachedIds ? cachedIds.includes(c.id) : null;
 
     let verdict, reason;

@@ -109,14 +109,6 @@ function toArray<T>(v: T | T[] | null | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-function normalizeLocation(s: string): string {
-  const t = (s || "").trim().toLowerCase();
-  if (t === "on-site" || t === "onsite") return "onsite";
-  if (t === "remote") return "remote";
-  if (t === "hybrid") return "hybrid";
-  return (s || "").trim().toLowerCase();
-}
-
 function getJDRoleFitOneLiner(jd: Record<string, unknown>): string {
   const rf = jd.role_fit;
   if (rf != null && typeof rf === "object" && "one_liner" in rf) {
@@ -380,7 +372,6 @@ async function geminiBatchMatch(
 
 function workAuthMatch(
   jobAuth: { us_required?: boolean; eu_required?: boolean; provided?: boolean },
-  jobLocationTypes: string[],
   candidateAuthRegions: string[] | undefined
 ): boolean {
   if (jobAuth?.provided) return true;
@@ -389,11 +380,11 @@ function workAuthMatch(
   // reject — pass and let the recruiter judge. New submissions always carry
   // authRegions (intake requires at least one), so they're still filtered strictly.
   if (regions.length === 0) return true;
-  const hasRemoteGlobal = regions.some((r) => r.includes("remote") && r.includes("global"));
-  if (hasRemoteGlobal) {
-    const job = jobLocationTypes.map(normalizeLocation);
-    if (!job.includes("remote")) return false;
-  }
+  // Work authorization is decoupled from work location (docs/work-auth-matching.md):
+  // the candidate's location is locked to the JD at intake, so this gate checks only
+  // legal authorization. The "Neither — I work remotely from my own country" answer
+  // (stored as the legacy "Remote Global" value) carries no "us"/"eu" token, so it
+  // naturally fails US/EU-required roles and passes No-requirement / Sponsor roles.
   if (jobAuth?.us_required && !regions.some((r) => r.includes("us"))) return false;
   if (jobAuth?.eu_required && !regions.some((r) => r.includes("eu"))) return false;
   return true;
@@ -500,7 +491,6 @@ export async function runMatch(
   }
 
   const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
-  const jobLocationTypes = toArray(jd.location_type).map(String).map(normalizeLocation).filter(Boolean);
   const jobAuth = (jd.work_auth_requirement as Record<string, boolean> | undefined) ?? {};
 
   // OPTIMIZATION: select only the fields the filter/sort/match pipeline needs.
@@ -535,7 +525,7 @@ export async function runMatch(
 
   list = list.filter((c) => (c.score ?? 0) >= 50);
   list = list.filter((c) =>
-    workAuthMatch(jobAuth, jobLocationTypes, (c.matchData as Record<string, unknown>)?.authRegions as string[] | undefined)
+    workAuthMatch(jobAuth, (c.matchData as Record<string, unknown>)?.authRegions as string[] | undefined)
   );
 
   list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));

@@ -1,10 +1,18 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { cleanTitle, buildOneLiner } from "@/lib/jd-role-fit";
+import {
+  WORK_AUTH_OPTIONS,
+  LOCATION_TYPES,
+  EMPLOYMENT_TYPES,
+  workAuthChoiceToBooleans,
+  workAuthBooleansToChoice,
+  type WorkAuthChoice,
+} from "@/lib/jd-options";
 
 type JDForm = {
   title: string;
@@ -24,6 +32,45 @@ function parseCommaSeparated(value: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// Match the existing app product surfaces (dashboard / analytics / sidebar):
+// gray neutrals, dark #0a0a0a canvas, subtle bordered cards (border-white/[0.06]
+// on bg-white/[0.02]), emerald used only as an accent, soft emerald field focus.
+const CARD =
+  "rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] p-6 md:p-7";
+const FIELD =
+  "w-full px-3.5 py-2.5 rounded-lg border border-gray-200 dark:border-white/[0.1] bg-white dark:bg-white/[0.04] text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition-colors";
+const LABEL = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5";
+
+// Work-auth options + location/employment choices + the boolean⇄choice mapping
+// live in @/lib/jd-options (single source of truth, shared with the Slack intake
+// flow). Radios still stop recruiters from setting contradictory states like
+// "US + EU both" (an unsatisfiable AND) or "sponsor + region required".
+
+function SectionCard({
+  icon,
+  title,
+  desc,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  desc: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={CARD}>
+      <div className="mb-5">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+          <span className="text-emerald-600 dark:text-emerald-400">{icon}</span>
+          {title}
+        </h2>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{desc}</p>
+      </div>
+      <div className="space-y-5">{children}</div>
+    </div>
+  );
 }
 
 function JDConfirmContent() {
@@ -113,9 +160,9 @@ function JDConfirmContent() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Checking authentication…</p>
         </div>
       </div>
@@ -124,9 +171,9 @@ function JDConfirmContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
         </div>
       </div>
@@ -134,9 +181,9 @@ function JDConfirmContent() {
   }
   if (!form) {
     return (
-      <div className="min-h-screen transition-colors duration-300 flex flex-col items-center justify-center px-6">
-        <div className="max-w-md w-full text-center animate-scale-in">
-          <div className="mb-6 animate-bounce-in">
+      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex flex-col items-center justify-center px-6">
+        <div className="max-w-md w-full text-center animate-fade-in">
+          <div className="mb-6">
             <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -150,7 +197,7 @@ function JDConfirmContent() {
           <button
             type="button"
             onClick={() => router.push("/user/dashboard")}
-            className="inline-flex px-6 py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98]"
+            className="inline-flex px-5 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:opacity-90 transition active:scale-[0.98]"
           >
             Back to Dashboard
           </button>
@@ -161,6 +208,13 @@ function JDConfirmContent() {
 
   const update = <K extends keyof JDForm>(field: K, value: JDForm[K]) =>
     setForm((p) => ({ ...(p ?? ({} as JDForm)), [field]: value }));
+
+  // Collapse the three persisted booleans into the single active choice, and
+  // expand a chosen option back into exactly one boolean (or none) — shared
+  // mappers so the web form and the Slack intake flow agree.
+  const workAuthChoice: WorkAuthChoice = workAuthBooleansToChoice(form);
+  const setWorkAuthChoice = (v: WorkAuthChoice) =>
+    setForm((p) => (p ? { ...p, ...workAuthChoiceToBooleans(v) } : p));
 
   const primary = parseCommaSeparated(primaryRaw);
   const secondary = parseCommaSeparated(secondaryRaw);
@@ -226,422 +280,357 @@ function JDConfirmContent() {
   };
 
   return (
-    <div className="min-h-screen transition-colors duration-300 flex flex-col">
-      {/* Sticky Header */}
-      <nav className="sticky top-0 z-40 border-b border-gray-200/80 dark:border-white/[0.05] bg-white/80 dark:bg-[#0a0a0e]/80 backdrop-blur-md transition-all duration-300">
-        <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100 antialiased">
+      {/* Top bar */}
+      <header className="sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-[#0a0a0a]/80 backdrop-blur-md">
+        <div className="max-w-4xl mx-auto px-6 h-14 grid grid-cols-[1fr_auto_1fr] items-center">
           <button
             onClick={() => router.push("/user/dashboard")}
-            className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-all duration-200 flex items-center gap-1.5 group hover:gap-2"
+            className="justify-self-start text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition flex items-center gap-1.5 group"
           >
             <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
             Back to dashboard
           </button>
-          <span className="text-lg font-semibold tracking-tight text-gray-900 dark:text-gray-100">EigenWork</span>
-          <div className="w-20" /> {/* Spacer for centering */}
+          <span className="justify-self-center text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">
+            EigenWork
+          </span>
+          <div />
         </div>
-      </nav>
+      </header>
 
-      {/* Main Content */}
-      <div className="flex-1 py-8 md:py-12">
-        <div className="max-w-4xl mx-auto px-6">
-          {/* Page Header */}
-          <div className="mb-8 opacity-0 animate-fade-in-up" style={{ animationDelay: "0.05s", animationFillMode: "forwards" }}>
-            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 dark:text-gray-100 mb-2">
-              {jobIdFromUrl ? "Edit Role" : "Review & Confirm"}
-            </h1>
-            <p className="text-gray-600 dark:text-gray-400">
-              {jobIdFromUrl ? "Update your role details and settings" : "Review the extracted details and configure your pipeline"}
-            </p>
+      <main className="max-w-4xl mx-auto px-6 py-10 md:py-12">
+        {/* Page header */}
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
+            {jobIdFromUrl ? "Edit Role" : "Review & Confirm"}
+          </h1>
+          <p className="mt-2 text-gray-500 dark:text-gray-400">
+            {jobIdFromUrl ? "Update your role details and settings" : "Review the extracted details and configure your pipeline"}
+          </p>
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="mb-6 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded-xl p-4 flex items-start gap-3 animate-fade-in">
+            <svg className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-rose-900 dark:text-rose-200">{error}</p>
+            </div>
+            <button onClick={() => setError(null)} className="text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
+        )}
 
-          <div className="space-y-6">
-            {/* Error Message */}
-            {error && (
-              <div className="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-start gap-3 animate-bounce-in">
-                <svg className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-red-900 dark:text-red-200">{error}</p>
-                </div>
-                <button
-                  onClick={() => setError(null)}
-                  className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"
+        <div className="space-y-5">
+          {/* Role Details */}
+          <SectionCard
+            icon={
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+            }
+            title="Role Details"
+            desc="Core information about the position"
+          >
+            <div>
+              <label className={LABEL}>Role Title (One-Liner)</label>
+              <div className="flex">
+                <input
+                  type="text"
+                  value={form.title || ""}
+                  onChange={(e) => update("title", e.target.value)}
+                  onFocus={() => setFocusedField("title")}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="e.g. Software Engineer"
+                  className={`${FIELD} rounded-r-none flex-1 min-w-0`}
+                />
+                <div
+                  className={`px-3.5 py-2.5 rounded-r-lg border border-l-0 text-sm flex items-center overflow-hidden text-ellipsis min-w-[120px] max-w-[45%] bg-gray-100 dark:bg-white/[0.06] ${
+                    focusedField === "title" ? "border-emerald-500" : "border-gray-200 dark:border-white/[0.1]"
+                  } ${suffix ? "text-gray-600 dark:text-gray-300" : "text-gray-400 dark:text-gray-500 italic"}`}
+                  title={suffix || "Add Primary/Secondary/Tertiary stack below"}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                  {suffix || "(Add stack below)"}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-5">
+              <div>
+                <label className={LABEL}>Seniority</label>
+                <select
+                  className={`${FIELD} cursor-pointer`}
+                  value={form.seniority || ""}
+                  onChange={(e) => update("seniority", e.target.value)}
+                >
+                  <option value="">Select seniority</option>
+                  <option>Intern</option>
+                  <option>Junior</option>
+                  <option>Mid</option>
+                  <option>Senior</option>
+                  <option>Staff</option>
+                  <option>Principal</option>
+                </select>
+              </div>
+              <div>
+                <label className={LABEL}>Role Category</label>
+                <select
+                  className={`${FIELD} cursor-pointer`}
+                  value={form.role_category || ""}
+                  onChange={(e) => update("role_category", e.target.value)}
+                >
+                  <option value="">Select category</option>
+                  <option>Backend</option>
+                  <option>Frontend</option>
+                  <option>Fullstack</option>
+                  <option>AI/ML</option>
+                  <option>Data</option>
+                  <option>DevOps</option>
+                  <option>Mobile</option>
+                </select>
+              </div>
+            </div>
+          </SectionCard>
+
+          {/* Technical Stack */}
+          <SectionCard
+            icon={
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              </svg>
+            }
+            title="Technical Stack"
+            desc="Define the technologies and tools required"
+          >
+            <div>
+              <label className={LABEL}>Primary</label>
+              <input
+                type="text"
+                className={FIELD}
+                placeholder="e.g. C#/.NET, Python"
+                value={primaryRaw}
+                onChange={(e) => setPrimaryRaw(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={LABEL}>Secondary</label>
+              <input
+                type="text"
+                className={FIELD}
+                placeholder="e.g. REST APIs, Redis, Docker"
+                value={secondaryRaw}
+                onChange={(e) => setSecondaryRaw(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={LABEL}>Tertiary</label>
+              <input
+                type="text"
+                className={FIELD}
+                placeholder="e.g. Azure DevOps, Git"
+                value={tertiaryRaw}
+                onChange={(e) => setTertiaryRaw(e.target.value)}
+              />
+            </div>
+            {(primary.length > 0 || secondary.length > 0 || tertiary.length > 0) && (
+              <div className="pt-2 border-t border-gray-100 dark:border-white/[0.06]">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Preview</p>
+                <div className="space-y-2 text-sm">
+                  {primary.length > 0 && (
+                    <div className="flex gap-3">
+                      <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Primary:</span>
+                      <span className="text-gray-700 dark:text-gray-300">{primary.join(", ")}</span>
+                    </div>
+                  )}
+                  {secondary.length > 0 && (
+                    <div className="flex gap-3">
+                      <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Secondary:</span>
+                      <span className="text-gray-700 dark:text-gray-300">{secondary.join(", ")}</span>
+                    </div>
+                  )}
+                  {tertiary.length > 0 && (
+                    <div className="flex gap-3">
+                      <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Tertiary:</span>
+                      <span className="text-gray-700 dark:text-gray-300">{tertiary.join(", ")}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
+          </SectionCard>
 
-            {/* Role Details Card */}
-            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.1s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                  Role Details
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Core information about the position</p>
+          {/* Work Arrangement */}
+          <SectionCard
+            icon={
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            }
+            title="Work Arrangement"
+            desc="Location, experience, and employment details"
+          >
+            <div className="grid sm:grid-cols-2 gap-5">
+              <div>
+                <label className={LABEL}>Location Type</label>
+                <select
+                  className={`${FIELD} cursor-pointer`}
+                  value={form.location_type || ""}
+                  onChange={(e) => update("location_type", e.target.value)}
+                >
+                  <option value="">Select location</option>
+                  {LOCATION_TYPES.map((o) => (
+                    <option key={o}>{o}</option>
+                  ))}
+                </select>
               </div>
-              <div className="p-6 space-y-5">
-                {/* Role Title (One-Liner) */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Role Title (One-Liner)
-                  </label>
-                  <div className="flex gap-0 group">
-                    <input
-                      type="text"
-                      value={form.title || ""}
-                      onChange={(e) => update("title", e.target.value)}
-                      onFocus={() => setFocusedField("title")}
-                      onBlur={() => setFocusedField(null)}
-                      placeholder="e.g. Software Engineer"
-                      className={`flex-1 min-w-0 px-4 py-2.5 border border-r-0 rounded-l-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset focus:z-10 transition-all duration-200 ${focusedField === "title" ? "border-gray-300 dark:border-white/[0.15] shadow-sm" : "border-gray-200 dark:border-white/[0.1]"}`}
-                    />
-                    <div
-                      className={`px-4 py-2.5 border rounded-r-lg bg-gray-50 dark:bg-gray-800 text-sm overflow-hidden text-ellipsis min-w-[140px] max-w-[55%] flex items-center transition-all duration-200 ${suffix ? "text-gray-700 dark:text-gray-300 border-gray-200 dark:border-white/[0.1]" : "text-gray-400 dark:text-gray-500 italic border-gray-200 dark:border-white/[0.1]"} ${focusedField === "title" ? "border-gray-300 dark:border-white/[0.15]" : ""}`}
-                      title={suffix || "Add Primary/Secondary/Tertiary stack below"}
-                    >
-                      {suffix || "(Add stack below)"}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Seniority & Role Category Grid */}
-                <div className="grid md:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                      Seniority
-                    </label>
-                    <select
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
-                      value={form.seniority || ""}
-                      onChange={(e) => update("seniority", e.target.value)}
-                      onFocus={() => setFocusedField("seniority")}
-                      onBlur={() => setFocusedField(null)}
-                    >
-                      <option value="">Select seniority</option>
-                      <option>Intern</option>
-                      <option>Junior</option>
-                      <option>Mid</option>
-                      <option>Senior</option>
-                      <option>Staff</option>
-                      <option>Principal</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                      Role Category
-                    </label>
-                    <select
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
-                      value={form.role_category || ""}
-                      onChange={(e) => update("role_category", e.target.value)}
-                      onFocus={() => setFocusedField("role_category")}
-                      onBlur={() => setFocusedField(null)}
-                    >
-                      <option value="">Select category</option>
-                      <option>Backend</option>
-                      <option>Frontend</option>
-                      <option>Fullstack</option>
-                      <option>AI/ML</option>
-                      <option>Data</option>
-                      <option>DevOps</option>
-                      <option>Mobile</option>
-                    </select>
-                  </div>
-                </div>
+              <div>
+                <label className={LABEL}>Years of Experience</label>
+                <input
+                  type="number"
+                  min={0}
+                  className={FIELD}
+                  placeholder="e.g. 3"
+                  value={form.yoe_required || ""}
+                  onChange={(e) => update("yoe_required", e.target.value)}
+                />
               </div>
             </div>
-
-            {/* Technical Stack Card */}
-            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.15s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                  </svg>
-                  Technical Stack
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Define the technologies and tools required</p>
-              </div>
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Primary
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
-                    placeholder="e.g. C#/.NET, Python"
-                    value={primaryRaw}
-                    onChange={(e) => setPrimaryRaw(e.target.value)}
-                    onFocus={() => setFocusedField("primary")}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Secondary
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
-                    placeholder="e.g. REST APIs, Redis, Docker"
-                    value={secondaryRaw}
-                    onChange={(e) => setSecondaryRaw(e.target.value)}
-                    onFocus={() => setFocusedField("secondary")}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Tertiary
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
-                    placeholder="e.g. Azure DevOps, Git"
-                    value={tertiaryRaw}
-                    onChange={(e) => setTertiaryRaw(e.target.value)}
-                    onFocus={() => setFocusedField("tertiary")}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                {/* Stack Preview */}
-                {(primary.length > 0 || secondary.length > 0 || tertiary.length > 0) && (
-                  <div className="pt-4 border-t border-gray-100 dark:border-white/[0.05] animate-slide-in-right">
-                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                      Preview
-                    </p>
-                    <div className="space-y-2.5 text-sm">
-                      {primary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
-                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Primary:</span>
-                          <span className="text-gray-700 dark:text-gray-300">{primary.join(", ")}</span>
-                        </div>
-                      )}
-                      {secondary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
-                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Secondary:</span>
-                          <span className="text-gray-700 dark:text-gray-300">{secondary.join(", ")}</span>
-                        </div>
-                      )}
-                      {tertiary.length > 0 && (
-                        <div className="flex gap-3 p-2 rounded-md bg-gray-50/50 dark:bg-gray-800/50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800">
-                          <span className="text-gray-500 dark:text-gray-400 font-medium min-w-[80px]">Tertiary:</span>
-                          <span className="text-gray-700 dark:text-gray-300">{tertiary.join(", ")}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Work Arrangement Card */}
-            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.2s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Work Arrangement
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Location, experience, and employment details</p>
-              </div>
-              <div className="p-6 space-y-5">
-                <div className="grid md:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                      Location Type
-                    </label>
-                    <select
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
-                      value={form.location_type || ""}
-                      onChange={(e) => update("location_type", e.target.value)}
-                      onFocus={() => setFocusedField("location")}
-                      onBlur={() => setFocusedField(null)}
-                    >
-                      <option value="">Select location</option>
-                      <option>Remote</option>
-                      <option>Hybrid</option>
-                      <option>On-site</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                      Years of Experience
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600"
-                      placeholder="e.g. 3"
-                      value={form.yoe_required || ""}
-                      onChange={(e) => update("yoe_required", e.target.value)}
-                      onFocus={() => setFocusedField("yoe")}
-                      onBlur={() => setFocusedField(null)}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Employment Type
-                  </label>
-                    <select
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
-                      value={form.employment_type || ""}
-                      onChange={(e) => update("employment_type", e.target.value)}
-                      onFocus={() => setFocusedField("employment")}
-                      onBlur={() => setFocusedField(null)}
-                    >
-                    <option value="">Select type</option>
-                    <option>Full-time</option>
-                    <option>Intern</option>
-                    <option>Contract</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Work Authorization Card */}
-            <div className="bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200 dark:border-white/[0.05] shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-300" style={{ animationDelay: "0.25s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                  </svg>
-                  Work Authorization
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Specify authorization requirements</p>
-              </div>
-              <div className="p-6">
-                <div className="space-y-3">
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
-                      checked={form.work_auth_us_required || false}
-                      onChange={(e) => update("work_auth_us_required", e.target.checked)}
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">US work authorization required</span>
-                  </label>
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
-                      checked={form.work_auth_eu_required || false}
-                      onChange={(e) => update("work_auth_eu_required", e.target.checked)}
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">EU work authorization required</span>
-                  </label>
-                  <label className="flex items-center gap-3 cursor-pointer group p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/[0.1] rounded focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 cursor-pointer transition-all duration-200"
-                      checked={form.work_auth_provided || false}
-                      onChange={(e) => update("work_auth_provided", e.target.checked)}
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-200">Work authorization will be provided</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* Pipeline Settings Card */}
-            <div className={`bg-white dark:bg-white/[0.02] rounded-xl border shadow-sm overflow-hidden opacity-0 animate-fade-in-up hover:shadow-md transition-all duration-300 ${error ? "border-red-200 dark:border-red-800" : "border-gray-200 dark:border-white/[0.05] hover:border-gray-300 dark:hover:border-gray-600"}`} style={{ animationDelay: "0.3s", animationFillMode: "forwards" }}>
-              <div className="px-6 py-4 border-b border-gray-100 dark:border-white/[0.05] bg-gradient-to-r from-gray-50/50 dark:from-gray-800/50 to-transparent">
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                  Pipeline Settings
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Configure applicant intake limits</p>
-              </div>
-              <div className="p-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1.5">
-                    Applicant Limit
-                  </label>
-                  <input
-                    ref={submissionCapInputRef}
-                    type="number"
-                    min={1}
-                    className={`w-full px-4 py-2.5 border rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-white/[0.02] placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-100 focus:ring-inset transition-all duration-200 ${error ? "border-red-300 dark:border-red-700 focus:ring-red-500" : "border-gray-200 dark:border-white/[0.1] hover:border-gray-300 dark:hover:border-gray-600"}`}
-                    placeholder="e.g. 50"
-                    value={form.submissionCap === undefined || form.submissionCap === "" ? "" : form.submissionCap}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      update("submissionCap", v === "" ? "" : Number(v));
-                      if (error) setError(null);
-                    }}
-                    onFocus={() => {
-                      setFocusedField("submissionCap");
-                      if (error) setError(null);
-                    }}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-                    The intake link closes when the applicant limit is reached. Shortlisting unlocks after at least 60% of the limit is collected.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex flex-col sm:flex-row gap-3 pt-2 opacity-0 animate-fade-in-up" style={{ animationDelay: "0.35s", animationFillMode: "forwards" }}>
-              <button
-                type="button"
-                onClick={() => router.push("/user/dashboard")}
-                className="flex-1 sm:flex-none px-6 py-3 border border-gray-200 dark:border-white/[0.1] text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-200 active:scale-[0.98]"
+            <div>
+              <label className={LABEL}>Employment Type</label>
+              <select
+                className={`${FIELD} cursor-pointer`}
+                value={form.employment_type || ""}
+                onChange={(e) => update("employment_type", e.target.value)}
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleContinue}
-                disabled={saving}
-                className="flex-1 sm:flex-auto px-6 py-3 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 hover:shadow-lg hover:shadow-gray-900/10 active:scale-[0.98] relative overflow-hidden group"
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  {saving ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Saving…
-                    </>
-                  ) : (
-                    <>
-                      {jobIdFromUrl ? "Save Changes" : "Create Pipeline"}
-                      <svg className="w-4 h-4 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    </>
-                  )}
-                </span>
-                {!saving && (
-                  <span className="absolute inset-0 bg-gradient-to-r from-gray-800 to-gray-900 dark:from-gray-200 dark:to-gray-100 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
-                )}
-              </button>
+                <option value="">Select type</option>
+                {EMPLOYMENT_TYPES.map((o) => (
+                  <option key={o}>{o}</option>
+                ))}
+              </select>
             </div>
-          </div>
+          </SectionCard>
+
+          {/* Work Authorization */}
+          <SectionCard
+            icon={
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            }
+            title="Work Authorization"
+            desc="Who can apply, based on where they can work — pick one"
+          >
+            <div className="space-y-1" role="radiogroup" aria-label="Work authorization requirement">
+              {WORK_AUTH_OPTIONS.map((opt) => {
+                const selected = workAuthChoice === opt.value;
+                return (
+                  <label
+                    key={opt.value}
+                    className="flex items-start gap-3 py-1.5 cursor-pointer group"
+                  >
+                    <input
+                      type="radio"
+                      name="work_auth_requirement"
+                      className="mt-0.5 w-4 h-4 accent-emerald-600 dark:accent-emerald-500 cursor-pointer focus:ring-2 focus:ring-emerald-500/40"
+                      checked={selected}
+                      onChange={() => setWorkAuthChoice(opt.value)}
+                    />
+                    <span className="text-sm">
+                      <span
+                        className={`block transition-colors ${
+                          selected
+                            ? "text-gray-900 dark:text-gray-100"
+                            : "text-gray-800 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-gray-100"
+                        }`}
+                      >
+                        {opt.title}
+                      </span>
+                      <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        {opt.desc}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </SectionCard>
+
+          {/* Pipeline Settings */}
+          <SectionCard
+            icon={
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            }
+            title="Pipeline Settings"
+            desc="Configure applicant intake limits"
+          >
+            <div>
+              <label className={LABEL}>Applicant Limit</label>
+              <input
+                ref={submissionCapInputRef}
+                type="number"
+                min={1}
+                className={`${FIELD} ${error ? "border-rose-300 dark:border-rose-700 focus:ring-rose-500/30 focus:border-rose-500" : ""}`}
+                placeholder="e.g. 50"
+                value={form.submissionCap === undefined || form.submissionCap === "" ? "" : form.submissionCap}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  update("submissionCap", v === "" ? "" : Number(v));
+                  if (error) setError(null);
+                }}
+                onFocus={() => {
+                  if (error) setError(null);
+                }}
+              />
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                The intake link closes when the applicant limit is reached. Shortlisting unlocks after at least 60% of the limit is collected.
+              </p>
+            </div>
+          </SectionCard>
         </div>
-      </div>
+
+        {/* Actions */}
+        <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
+          <button
+            type="button"
+            onClick={() => router.push("/user/dashboard")}
+            className="px-5 py-2.5 border border-gray-200 dark:border-white/[0.1] text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-100 dark:hover:bg-white/[0.04] transition active:scale-[0.98]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleContinue}
+            disabled={saving}
+            className="px-6 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed transition active:scale-[0.98] inline-flex items-center justify-center gap-2"
+          >
+            {saving ? (
+              <>
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving…
+              </>
+            ) : (
+              <>
+                {jobIdFromUrl ? "Save Changes" : "Create Pipeline"}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                </svg>
+              </>
+            )}
+          </button>
+        </div>
+      </main>
     </div>
   );
 }
@@ -649,9 +638,9 @@ function JDConfirmContent() {
 export default function JDConfirmPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen transition-colors duration-300 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-gray-900 dark:border-t-gray-100 mb-4"></div>
+          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
         </div>
       </div>
