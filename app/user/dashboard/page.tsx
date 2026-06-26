@@ -24,6 +24,7 @@ import { auth } from "@/lib/firebase";
 import { getIdTokenOrNull } from "@/lib/auth-client";
 import { usePageTitle } from "@/lib/use-page-title";
 import { useDashboardData } from "@/lib/use-dashboard-data";
+import { deriveRoleStatus, type RoleStatus } from "@/lib/jd-status";
 import { FreeClaimGate } from "../FreeClaimGate";
 import { PreviewSidebar } from "../PreviewSidebar";
 import { ConnectSlackCard } from "../ConnectSlackCard";
@@ -66,7 +67,7 @@ async function kpiFetcher(url: string): Promise<{ snapshot: KpiSnapshot | null }
 
 // ----- Types -----------------------------------------------------------
 
-type Status = "open" | "awaiting" | "ready" | "closed";
+type Status = RoleStatus;
 
 type HealthRow = {
   id: string;
@@ -97,13 +98,8 @@ const STATUS_STYLE: Record<Status, { label: string; pill: string; dot: string }>
   closed:   { label: "Closed",  pill: "bg-gray-100 text-gray-500 dark:bg-white/[0.04] dark:text-gray-400",          dot: "bg-gray-400" },
 };
 
-function deriveStatus(p: Pipeline): Status {
-  if (p.isClosed || p.hasMatchResult) return "closed";
-  const ratio = p.submissionCap > 0 ? p.appliedCount / p.submissionCap : 0;
-  if (ratio >= 0.6) return "ready";
-  if (p.appliedCount > 0) return "awaiting";
-  return "open";
-}
+// Canonical status logic lives in @/lib/jd-status (shared with the Slack bot).
+const deriveStatus = (p: Pipeline): Status => deriveRoleStatus(p);
 
 function relativeAgo(createdAt: number | null): string {
   if (!createdAt) return "—";

@@ -1,4 +1,5 @@
 import { getAdminDb } from "@/lib/firebase-admin";
+import { deriveRoleStatus, type RoleStatus } from "@/lib/jd-status";
 
 /**
  * Org-scoped read layer for the agent (ADR-010 Phase 2). Everything here is
@@ -75,6 +76,57 @@ export async function getOrgCandidateRoster(orgId: string): Promise<CandidateLit
     })
   );
   return perJob.flat();
+}
+
+export type RoleWithStatus = {
+  id: string;
+  title: string;
+  seniority: string;
+  status: RoleStatus;
+  appliedCount: number;
+  submissionCap: number;
+};
+
+/**
+ * Roles + live fill status, for the bot's roles answers. Mirrors the dashboard's
+ * /api/jd/list derivation (appliedCount = candidates with status "submitted" on
+ * this job) but reuses the shared `deriveRoleStatus`, so "Filling/Ready/Closed"
+ * can't drift between Slack and the dashboard. Runs a count() per role, so it's
+ * called only when a roles question fires — never on the per-message router path.
+ */
+export async function listRolesWithStatus(orgId: string): Promise<RoleWithStatus[]> {
+  const db = getAdminDb();
+  const snap = await db.collection("jds").where("orgId", "==", orgId).get();
+  return Promise.all(
+    snap.docs.map(async (d) => {
+      const data = d.data();
+      const rawCap = typeof data.submissionCap === "number" ? data.submissionCap : parseInt(String(data.submissionCap), 10);
+      const submissionCap = Number.isInteger(rawCap) && rawCap >= 1 ? rawCap : 10;
+      const isClosed = Boolean(data.isClosed);
+      const mr = data.matchResult as { top20?: unknown[] } | undefined;
+      const hasMatchResult = Array.isArray(mr?.top20) && mr.top20.length > 0;
+      let appliedCount = 0;
+      try {
+        const countSnap = await db
+          .collection("candidates")
+          .where("matchData.jobId", "==", d.id)
+          .where("status", "==", "submitted")
+          .count()
+          .get();
+        appliedCount = countSnap.data().count;
+      } catch {
+        appliedCount = 0; // count unavailable → treat as no applicants (status degrades gracefully)
+      }
+      return {
+        id: d.id,
+        title: typeof data.title === "string" ? data.title : "",
+        seniority: typeof data.seniority === "string" ? data.seniority : "",
+        status: deriveRoleStatus({ isClosed, hasMatchResult, submissionCap, appliedCount }),
+        appliedCount,
+        submissionCap,
+      };
+    })
+  );
 }
 
 export async function getCandidateDetail(orgId: string, candidateId: string): Promise<CandidateDetail | null> {
