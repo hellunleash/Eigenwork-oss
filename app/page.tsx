@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "EigenWork - Intelligent Technical Candidate Evaluation",
-  description: "Stop reviewing everyone, start interviewing the right ones. Evaluate candidates with ETI — EigenTrustIndex. Trust scores, operating profiles, and role fit in one place.",
+  title: { absolute: "EigenWork — Technical hiring, right from Slack" },
+  description:
+    "Post a role, get a ranked shortlist, and reach out — right from Slack. EigenWork reads each candidate's real code and work history, and flags the ones who don't hold up.",
   robots: {
     index: true,
     follow: true,
@@ -12,8 +13,8 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: "EigenWork - Intelligent Technical Candidate Evaluation",
-    description: "Stop reviewing everyone, start interviewing the right ones. Evaluate candidates with ETI — EigenTrustIndex.",
+    title: "EigenWork — Technical hiring, right from Slack",
+    description: "Technical hiring, right from Slack. Post a role, get a ranked shortlist with risk flags, and reach out — the engine reads the actual work, not just the résumé.",
     type: "website",
   },
 };

@@ -16,9 +16,9 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://eigenwork.com"),
   title: {
     template: "%s | EigenWork",
-    default: "EigenWork - Intelligent Technical Candidate Evaluation",
+    default: "EigenWork — Technical hiring, right from Slack",
   },
-  description: "Intelligent technical candidate evaluation for startups, powered by ETI — EigenTrustIndex. Make confident hiring decisions with data-driven insights.",
+  description: "EigenWork screens engineers on their real code and work history. Post a role in Slack, get a ranked shortlist with risk flags, and reach out — built for technical hiring.",
   robots: {
     index: true,
     follow: true,
