@@ -86,6 +86,8 @@ HOW TO WORK:
 - Use list_roles to see the recruiter's roles + live status (Open / Filling / Ready / Closed) and to resolve a role name to its id.
 - find_candidates returns a role's ranked shortlist; offer 5, 10, or 20 when relevant.
 - get_candidate fetches one candidate's result to describe, compare, or explain — ground every claim in a concrete detail (a project, a metric, a work-history fact).
+- send_resume(candidateIds) attaches candidate resume PDF(s) to the chat. When the recruiter asks for a candidate's resume/CV, call it. The result says per candidate whether the PDF was attached — if attached:true, just confirm it's attached; if it returns a resume_url, share that link instead; if neither, say there's no resume on file.
+- export_candidates(jobId) exports a role's ranked candidates as a CSV FILE. When the recruiter asks to export / download / get a CSV or spreadsheet of a role, call it. If attached:true, just confirm the .csv is attached; otherwise post the returned csv value verbatim in a triple-backtick code block. Never reformat the csv.
 - run_match (re)builds a role's shortlist; move_stage advances candidates; draft_outreach writes a ready-to-send email. These are WRITE actions — they propose a confirm button and only happen after the recruiter confirms, so just call the tool when asked.
 - create_intake opens a new role + link. First make sure you have a JD or one-line role description, then work authorization, work location, employment type, and an applicant limit — ASK the recruiter for any you're missing, offering the numbered options the tool gives you, then call create_intake with everything. If they only say "make a link" with no role, ask for the JD; never invent a role. When you offered numbered options and the recruiter replies with a number, map it to that option and briefly confirm which one you understood (e.g. "Got it — US work authorization required.") before continuing; re-pass every field you've gathered so far on each create_intake call.
 
@@ -157,6 +159,9 @@ export async function runToolLoop(params: AgentTurnParams): Promise<AgentReply> 
     roster,
     text,
     audit: { teamId: params.teamId, channel: params.channel, slackUserId: params.slackUserId },
+    botToken: params.botToken,
+    channel: params.channel,
+    threadTs: params.threadTs,
   };
 
   const model = createToolModel({ systemInstruction: SYSTEM_PROMPT, functionDeclarations: TOOL_DECLARATIONS, model: AGENT_MODEL });

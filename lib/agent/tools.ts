@@ -2,10 +2,15 @@ import { SchemaType, type FunctionDeclaration } from "@google/generative-ai";
 import {
   listRolesWithStatus,
   getCandidateDetail,
+  getRoleCandidatesForExport,
+  getCandidateResume,
   type CandidateLite,
   type JobLite,
   type CandidateDetail,
 } from "@/lib/agent/data";
+import { buildCandidateCsv } from "@/lib/candidate-export";
+import { slackUploadFile } from "@/lib/slack/client";
+import { log } from "@/lib/server-logger";
 import { ROLE_STATUS_LABEL } from "@/lib/jd-status";
 import { STAGES, OUTCOMES } from "@/lib/stage";
 import { renderOutreachReply } from "@/lib/outreach";
@@ -39,7 +44,7 @@ import type { AgentReply, AuditMeta } from "@/lib/agent/types";
  * validated against the caller's own roster) — T3/T4.
  */
 
-export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate"] as const;
+export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate", "export_candidates", "send_resume"] as const;
 export const WRITE_TOOLS = ["run_match", "create_intake", "move_stage", "draft_outreach"] as const;
 export type ToolName = (typeof READ_TOOLS)[number] | (typeof WRITE_TOOLS)[number];
 
@@ -59,6 +64,11 @@ export type ToolCtx = {
   /** The recruiter's raw turn — create_intake falls back to it for JD text. */
   text: string;
   audit: AuditMeta;
+  /** Slack delivery context for file attachments (resume PDF / CSV). Absent for
+   *  non-Slack callers → tools fall back to a link / code block. */
+  botToken?: string;
+  channel?: string;
+  threadTs?: string;
 };
 
 /** A read tool result is a plain object handed back to the model as the function
@@ -98,11 +108,31 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "get_candidate",
     description:
-      "Fetch ONE candidate's already-computed result (headline, standout edge, any flag, score, work history) to describe, compare, or explain them. Never re-scores. candidateId must come from find_candidates / a prior turn.",
+      "Fetch ONE candidate's already-computed result (headline, standout edge, any flag, score, work history) to describe, compare, or explain them. Never re-scores. For their resume use send_resume. candidateId must come from find_candidates / a prior turn.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: { candidateId: { type: SchemaType.STRING, description: "Candidate id from the shortlist." } },
       required: ["candidateId"],
+    },
+  },
+  {
+    name: "export_candidates",
+    description:
+      "Export a role's ranked candidates as CSV (rank, name, score, location, work auth, headline, edge, flag, role fit). Use when the recruiter asks to export, download, or get a CSV/spreadsheet of a role. It attaches a .csv FILE to the chat; the result tells you whether it was attached (just confirm it) or, as a fallback, returns the csv text to post in a code block. (No email/resume in the bulk export — use send_resume for an individual resume.)",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { jobId: { type: SchemaType.STRING, description: "Role id from list_roles." } },
+      required: ["jobId"],
+    },
+  },
+  {
+    name: "send_resume",
+    description:
+      "Attach candidate resume PDF(s) to the chat. Use when the recruiter asks for a candidate's resume / CV. The result tells you whether each PDF was attached (just confirm it) or, as a fallback, returns a download link. candidateIds must come from a shortlist / prior turn (max 5).",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { candidateIds: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING }, description: "Candidate ids whose resumes to send." } },
+      required: ["candidateIds"],
     },
   },
   {
@@ -179,6 +209,10 @@ export async function dispatchRead(name: string, args: Record<string, unknown>, 
       return readFindCandidates(args, ctx);
     case "get_candidate":
       return readGetCandidate(args, ctx);
+    case "export_candidates":
+      return readExportCandidates(args, ctx);
+    case "send_resume":
+      return readSendResume(args, ctx);
     default:
       return { error: `Unknown read tool: ${name}` };
   }
@@ -233,7 +267,78 @@ async function readGetCandidate(args: Record<string, unknown>, ctx: ToolCtx): Pr
   // T3: getCandidateDetail re-checks that the candidate's JD belongs to orgId.
   const d = await getCandidateDetail(ctx.orgId, id);
   if (!d) return { error: "I couldn't load that candidate's details." };
-  return { candidate: candidateFactsObject(d), _note: FENCE_NOTE };
+  // resume_url is a system-generated signed link (not candidate-controlled), so it
+  // sits OUTSIDE the untrusted candidate block — the bot can share it as a link.
+  return { candidate: candidateFactsObject(d), resume_url: d.resumeUrl, _note: FENCE_NOTE };
+}
+
+async function readExportCandidates(args: Record<string, unknown>, ctx: ToolCtx): Promise<ReadResult> {
+  const jobId = typeof args.jobId === "string" ? args.jobId : "";
+  if (!ctx.jobs.some((j) => j.id === jobId)) {
+    return { error: "I don't see that role. Ask me to list your roles first." };
+  }
+  // T3: org ownership re-checked server-side.
+  const out = await getRoleCandidatesForExport(ctx.orgId, jobId);
+  if (!out) return { error: "I don't see that role." };
+  if (out.rows.length === 0) {
+    return { error: "That role has no shortlist yet — (re)build the shortlist first, then export." };
+  }
+  const csv = buildCandidateCsv(out.rows);
+  const slug = (out.role || "role").replace(/[^\w.-]+/g, "_").toLowerCase();
+  const filename = `eigenwork-${slug}-candidates.csv`;
+  const attached = await tryAttach(ctx, { filename, bytes: Buffer.from(csv, "utf8"), title: `${out.role || "Role"} — top candidates` });
+  if (attached) {
+    return { role: out.role, count: out.rows.length, attached: true, note: `Attached ${filename} with ${out.rows.length} candidates — confirm it's attached.` };
+  }
+  // Fallback (files:write not granted yet / non-Slack caller): post the CSV inline.
+  return {
+    role: out.role,
+    count: out.rows.length,
+    attached: false,
+    csv,
+    instruction: "Couldn't attach a file — post the csv value verbatim in a triple-backtick code block, and note they can reconnect Slack for a downloadable .csv.",
+  };
+}
+
+async function readSendResume(args: Record<string, unknown>, ctx: ToolCtx): Promise<ReadResult> {
+  const ids = (Array.isArray(args.candidateIds) ? args.candidateIds.filter((x): x is string => typeof x === "string") : [])
+    .filter((id) => ctx.roster.some((c) => c.id === id))
+    .slice(0, 5);
+  if (ids.length === 0) return { error: "Which candidate's resume? Give me a candidate from a shortlist." };
+  const resumes = await Promise.all(ids.map((id) => deliverResume(ctx, id)));
+  return { resumes };
+}
+
+/** Attach the candidate's PDF if possible; otherwise hand back a link (or note no
+ *  resume). T3: getCandidateResume / getCandidateDetail both re-check org ownership. */
+async function deliverResume(ctx: ToolCtx, id: string): Promise<Record<string, unknown>> {
+  const name = ctx.roster.find((c) => c.id === id)?.name ?? "Candidate";
+  const resume = await getCandidateResume(ctx.orgId, id);
+  if (resume && (await tryAttach(ctx, { filename: resume.filename, bytes: resume.bytes, title: `${name} — resume` }))) {
+    return { name, attached: true };
+  }
+  const detail = await getCandidateDetail(ctx.orgId, id);
+  if (detail?.resumeUrl) return { name, attached: false, resume_url: detail.resumeUrl };
+  return { name, attached: false, note: "No resume on file for this candidate." };
+}
+
+/** Upload a file to the chat, falling back to false when the bot can't (no
+ *  files:write scope yet, non-Slack caller, or a Slack API error). Never throws. */
+async function tryAttach(ctx: ToolCtx, file: { filename: string; bytes: Buffer; title?: string }): Promise<boolean> {
+  if (!ctx.botToken || !ctx.channel) return false;
+  try {
+    await slackUploadFile(ctx.botToken, {
+      channel: ctx.channel,
+      filename: file.filename,
+      bytes: file.bytes,
+      title: file.title,
+      threadTs: ctx.threadTs,
+    });
+    return true;
+  } catch (err) {
+    log("warn", "agent.file_attach_failed", { filename: file.filename }, err);
+    return false;
+  }
 }
 
 /** The allow-listed, recruiter-facing fact block — the only candidate fields a tool

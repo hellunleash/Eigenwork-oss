@@ -1,5 +1,6 @@
-import { getAdminDb } from "@/lib/firebase-admin";
+import { getAdminDb, freshResumeUrl, adminStorageDownload } from "@/lib/firebase-admin";
 import { deriveRoleStatus, type RoleStatus } from "@/lib/jd-status";
+import { type CandidateExportRow } from "@/lib/candidate-export";
 
 /**
  * Org-scoped read layer for the agent (ADR-010 Phase 2). Everything here is
@@ -30,6 +31,9 @@ export type CandidateDetail = {
   githubMetrics: unknown;
   workHistory: unknown;
   stage: string | null;
+  /** A fresh 1-hour signed URL to the candidate's resume PDF (regenerated on read,
+   *  like the dashboard download button), or null if no resume on file. */
+  resumeUrl: string | null;
 };
 
 export async function listJobs(orgId: string): Promise<JobLite[]> {
@@ -150,6 +154,7 @@ export async function getCandidateDetail(orgId: string, candidateId: string): Pr
   if (!jdSnap.exists || (jdSnap.data()?.orgId as string | undefined) !== orgId) return null;
 
   const card = d.card as { title?: string; edge?: string; flag?: string } | undefined;
+  const resumePath = typeof d.resumePath === "string" ? d.resumePath : null;
   return {
     id: candidateId,
     name: typeof d.candidateName === "string" && d.candidateName ? d.candidateName : "Candidate",
@@ -162,5 +167,89 @@ export async function getCandidateDetail(orgId: string, candidateId: string): Pr
     githubMetrics: d.github_metrics ?? null,
     workHistory: d.work_history ?? null,
     stage: typeof d.stage === "string" ? d.stage : null,
+    resumeUrl: await freshResumeUrl(resumePath),
+  };
+}
+
+/**
+ * The role's ranked candidates as flat export rows, drawn from the persisted
+ * shortlist (jds.matchResult.top20 — same data the dashboard's CSV export uses).
+ * Org-scoped: returns null if the JD isn't this org's (T3). No contact PII (email /
+ * resume) by design — the bulk export is screening data only.
+ */
+export async function getRoleCandidatesForExport(
+  orgId: string,
+  jobId: string
+): Promise<{ role: string; rows: CandidateExportRow[] } | null> {
+  const db = getAdminDb();
+  const snap = await db.collection("jds").doc(jobId).get();
+  const jd = snap.data();
+  if (!jd || jd.orgId !== orgId) return null;
+  const mr = jd.matchResult as { top20?: unknown[] } | undefined;
+  const top = Array.isArray(mr?.top20) ? mr!.top20 : [];
+  const rows = top.map((c, i) => mapExportRow(c, i));
+  return { role: typeof jd.title === "string" ? jd.title : "", rows };
+}
+
+/**
+ * The candidate's resume PDF bytes + a download filename, org-scoped (T3: the
+ * candidate's JD must belong to orgId). Returns null when there's no resume on file
+ * or the download fails — the caller falls back to a link. Used to ATTACH the PDF
+ * in Slack (vs. just linking it).
+ */
+export async function getCandidateResume(
+  orgId: string,
+  candidateId: string
+): Promise<{ filename: string; bytes: Buffer } | null> {
+  const db = getAdminDb();
+  const snap = await db.collection("candidates").doc(candidateId).get();
+  if (!snap.exists) return null;
+  const d = snap.data() as Record<string, unknown>;
+  const jobId = (d.matchData as { jobId?: unknown } | undefined)?.jobId;
+  if (typeof jobId !== "string") return null;
+  const jdSnap = await db.collection("jds").doc(jobId).get();
+  if (!jdSnap.exists || (jdSnap.data()?.orgId as string | undefined) !== orgId) return null;
+  const resumePath = typeof d.resumePath === "string" ? d.resumePath : null;
+  if (!resumePath) return null;
+  try {
+    const bytes = await adminStorageDownload(resumePath);
+    const name = typeof d.candidateName === "string" && d.candidateName ? d.candidateName : "candidate";
+    const filename = `${name.replace(/[^\w.-]+/g, "_")}-resume.pdf`;
+    return { filename, bytes };
+  } catch {
+    return null;
+  }
+}
+
+function mapExportRow(c: unknown, i: number): CandidateExportRow {
+  const e = c as {
+    candidateName?: string;
+    score?: number;
+    shortlistRank?: number;
+    matchData?: { locations?: unknown; work_auth?: unknown };
+    card?: { title?: string; edge?: string; flag?: string };
+    role_fit?: unknown;
+    profile?: { role_fit?: unknown };
+  };
+  const loc = e.matchData?.locations;
+  const location = Array.isArray(loc) ? loc.join("; ") : loc != null ? String(loc) : "";
+  const workAuth = typeof e.matchData?.work_auth === "string" ? e.matchData.work_auth.trim() : "";
+  const rf = e.role_fit ?? e.profile?.role_fit;
+  const roleFit =
+    typeof rf === "string"
+      ? rf
+      : rf != null && typeof rf === "object" && "one_liner" in rf
+        ? String((rf as Record<string, unknown>).one_liner ?? "")
+        : "";
+  return {
+    rank: typeof e.shortlistRank === "number" ? e.shortlistRank : i + 1,
+    name: e.candidateName ?? "",
+    score: typeof e.score === "number" ? e.score : null,
+    location,
+    workAuth,
+    title: e.card?.title ?? "",
+    edge: e.card?.edge ?? "",
+    flag: e.card?.flag ?? "",
+    roleFit,
   };
 }

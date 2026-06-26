@@ -39,6 +39,43 @@ export async function slackUpdateMessage(
   if (!data.ok) throw new Error(`slack_update_failed: ${data.error ?? res.status}`);
 }
 
+/**
+ * Upload a file (resume PDF / CSV export) and share it to a channel — Slack's
+ * three-step `files.uploadV2` flow (reserve URL → POST bytes → complete+share).
+ * Requires the `files:write` scope. Throws on any step's failure so the caller can
+ * fall back to a link / code block (e.g. when the scope hasn't been granted yet).
+ */
+export async function slackUploadFile(
+  botToken: string,
+  args: { channel: string; filename: string; bytes: Buffer; title?: string; threadTs?: string }
+): Promise<void> {
+  // 1. Reserve an external upload URL for this file.
+  const getRes = await fetch(`${SLACK_API}/files.getUploadURLExternal`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${botToken}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ filename: args.filename, length: String(args.bytes.length) }),
+  });
+  const getData = (await getRes.json().catch(() => ({}))) as { ok?: boolean; error?: string; upload_url?: string; file_id?: string };
+  if (!getData.ok || !getData.upload_url || !getData.file_id) {
+    throw new Error(`slack_get_upload_url_failed: ${getData.error ?? getRes.status}`);
+  }
+  // 2. POST the raw bytes to the reserved URL.
+  const putRes = await fetch(getData.upload_url, { method: "POST", body: new Uint8Array(args.bytes) });
+  if (!putRes.ok) throw new Error(`slack_file_put_failed: ${putRes.status}`);
+  // 3. Complete the upload and share it into the channel/thread.
+  const completeRes = await fetch(`${SLACK_API}/files.completeUploadExternal`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${botToken}`, "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      files: [{ id: getData.file_id, title: args.title ?? args.filename }],
+      channel_id: args.channel,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+    }),
+  });
+  const completeData = (await completeRes.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!completeData.ok) throw new Error(`slack_complete_upload_failed: ${completeData.error ?? completeRes.status}`);
+}
+
 export async function slackGetUserEmail(botToken: string, userId: string): Promise<string | null> {
   const res = await fetch(`${SLACK_API}/users.info?user=${encodeURIComponent(userId)}`, {
     headers: { Authorization: `Bearer ${botToken}` },

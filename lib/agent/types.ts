@@ -11,6 +11,11 @@ export type AgentTurnParams = {
   teamId?: string;
   channel?: string;
   slackUserId?: string;
+  /** Bot token for the installing workspace — lets tools attach files (resume PDF /
+   *  CSV) to the chat via the Slack file API. Absent for non-Slack callers. */
+  botToken?: string;
+  /** Thread root ts, when the turn is a threaded reply — files attach to the thread. */
+  threadTs?: string;
   /** Conversation key (DM channel or thread root). When set, the turn loads +
    *  persists short rolling memory so follow-ups ("both", "the first one") resolve. */
   convoKey?: string;

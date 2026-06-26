@@ -145,6 +145,8 @@ export async function POST(req: Request) {
             teamId,
             channel,
             slackUserId,
+            botToken: installation.botToken,
+            threadTs,
             convoKey,
           });
         } catch (err) {

@@ -18,6 +18,7 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const SCOPES = [
   "app_mentions:read",
   "chat:write",
+  "files:write", // attach resume PDFs + CSV exports to the chat (ADR-012)
   "im:history",
   "im:read",
   "im:write",
