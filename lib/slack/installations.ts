@@ -43,6 +43,16 @@ export async function saveInstallation(inst: SlackInstallation): Promise<void> {
   );
 }
 
+/** Find the install for an org (reverse of getInstallation). Used by proactive
+ *  notifications that start from a JD/org, not a Slack event. One install per org
+ *  today; first match wins. */
+export async function getInstallationByOrg(orgId: string): Promise<SlackInstallation | null> {
+  const db = getAdminDb();
+  const snap = await db.collection(COLLECTION).where("orgId", "==", orgId).limit(1).get();
+  const doc = snap.docs[0];
+  return doc ? getInstallation(doc.id) : null;
+}
+
 export async function getInstallation(teamId: string): Promise<SlackInstallation | null> {
   const db = getAdminDb();
   const snap = await db.collection(COLLECTION).doc(teamId).get();

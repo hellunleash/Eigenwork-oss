@@ -5,6 +5,7 @@ import { runEvaluation } from "@/lib/evaluation-runner";
 import { makeOpId } from "@/lib/credit-ledger";
 import { consumeEval } from "@/lib/entitlements";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
+import { maybeNotifyRoleProgress } from "@/lib/agent/role-notify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -140,12 +141,12 @@ export async function POST(req: Request) {
     );
 
     // Update candidate doc (idempotent: only set if still processing or missing score).
-    await db.runTransaction(async (tx) => {
+    const flippedToSubmitted = await db.runTransaction(async (tx) => {
       const snap = await tx.get(candidateRef);
-      if (!snap.exists) return;
+      if (!snap.exists) return false;
       const d = snap.data() as { status?: string; score?: number } | undefined;
       const alreadyScored = typeof d?.score === "number" && Number.isFinite(d.score);
-      if (alreadyScored) return;
+      if (alreadyScored) return false;
       tx.set(
         candidateRef,
         {
@@ -155,7 +156,12 @@ export async function POST(req: Request) {
         },
         { merge: true }
       );
+      return true;
     });
+
+    // This submission may have pushed the role past a notify threshold (ready @60%
+    // / full @cap) — DM the EigenBot installer. Best-effort, never blocks the eval.
+    if (flippedToSubmitted) await maybeNotifyRoleProgress(data.jobId ?? null);
 
     // Credits: deduct exactly once per candidate evaluation.
     //

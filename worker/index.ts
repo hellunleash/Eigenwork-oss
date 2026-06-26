@@ -53,6 +53,7 @@ import { buildEtiDistributionFromScores } from "@/lib/eti-distribution";
 // match and cascade-delete share one copy.
 import { runMatch } from "@/lib/match";
 import { runWithConcurrency } from "@/lib/concurrency";
+import { maybeNotifyRoleProgress } from "@/lib/agent/role-notify";
 import {
   log,
   timeMs,
@@ -249,12 +250,12 @@ async function handleWorkerEvaluate(req: ExpressRequest, res: ExpressResponse): 
     );
 
     // Idempotent doc write: skip if score already set (re-runs of the same job).
-    await db.runTransaction(async (tx) => {
+    const flippedToSubmitted = await db.runTransaction(async (tx) => {
       const snap = await tx.get(candidateRef);
-      if (!snap.exists) return;
+      if (!snap.exists) return false;
       const d = snap.data() as { status?: string; score?: number } | undefined;
       const alreadyScored = typeof d?.score === "number" && Number.isFinite(d.score);
-      if (alreadyScored) return;
+      if (alreadyScored) return false;
       tx.set(
         candidateRef,
         {
@@ -264,7 +265,12 @@ async function handleWorkerEvaluate(req: ExpressRequest, res: ExpressResponse): 
         },
         { merge: true }
       );
+      return true;
     });
+
+    // This submission may have pushed the role past a notify threshold (ready @60%
+    // / full @cap) — DM the EigenBot installer. Best-effort, never blocks the eval.
+    if (flippedToSubmitted) await maybeNotifyRoleProgress(data.jobId ?? null);
 
     // Screen deduction (org-scoped entitlements). Draws from the active pass
     // bucket first, then the overage wallet. See lib/entitlements.ts.

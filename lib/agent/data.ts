@@ -88,11 +88,31 @@ export type RoleWithStatus = {
 };
 
 /**
- * Roles + live fill status, for the bot's roles answers. Mirrors the dashboard's
- * /api/jd/list derivation (appliedCount = candidates with status "submitted" on
- * this job) but reuses the shared `deriveRoleStatus`, so "Filling/Ready/Closed"
- * can't drift between Slack and the dashboard. Runs a count() per role, so it's
- * called only when a roles question fires — never on the per-message router path.
+ * Submitted-candidate count for one role — the single definition of appliedCount
+ * (matchData.jobId == job AND status == "submitted"), the same one the dashboard,
+ * /api/jd/list and the submission-cap gate use. Centralized so every caller
+ * (listRolesWithStatus, the ready/full ping) shares ONE query, never its own copy.
+ * Degrades to 0 if the aggregate is unavailable.
+ */
+export async function countSubmitted(jobId: string): Promise<number> {
+  try {
+    const snap = await getAdminDb()
+      .collection("candidates")
+      .where("matchData.jobId", "==", jobId)
+      .where("status", "==", "submitted")
+      .count()
+      .get();
+    return snap.data().count;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Roles + live fill status, for the bot's roles answers. appliedCount comes from
+ * the shared `countSubmitted`; status from the shared `deriveRoleStatus`, so
+ * "Filling/Ready/Closed" can't drift between Slack and the dashboard. Counts per
+ * role, so it's called only when a roles question fires — never on the router path.
  */
 export async function listRolesWithStatus(orgId: string): Promise<RoleWithStatus[]> {
   const db = getAdminDb();
@@ -105,18 +125,7 @@ export async function listRolesWithStatus(orgId: string): Promise<RoleWithStatus
       const isClosed = Boolean(data.isClosed);
       const mr = data.matchResult as { top20?: unknown[] } | undefined;
       const hasMatchResult = Array.isArray(mr?.top20) && mr.top20.length > 0;
-      let appliedCount = 0;
-      try {
-        const countSnap = await db
-          .collection("candidates")
-          .where("matchData.jobId", "==", d.id)
-          .where("status", "==", "submitted")
-          .count()
-          .get();
-        appliedCount = countSnap.data().count;
-      } catch {
-        appliedCount = 0; // count unavailable → treat as no applicants (status degrades gracefully)
-      }
+      const appliedCount = await countSubmitted(d.id);
       return {
         id: d.id,
         title: typeof data.title === "string" ? data.title : "",
