@@ -3,7 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
-import useSWR from "swr";
+import useSWR, { mutate as swrMutate } from "swr";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -53,6 +53,9 @@ export default function TeamPage() {
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [nameSaved, setNameSaved] = useState(false);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) {
@@ -75,6 +78,20 @@ export default function TeamPage() {
   const { data: meData } = useSWR(authChecking ? null : "/api/user/me", swrFetcher, {
     dedupingInterval: 5000,
   });
+  const { data: orgListData } = useSWR(authChecking ? null : "/api/org/list", swrFetcher, {
+    dedupingInterval: 5000,
+  });
+
+  const activeOrg = Array.isArray(orgListData?.orgs)
+    ? orgListData.orgs.find((o: { isActive?: boolean }) => o.isActive)
+    : null;
+  const activeOrgName: string = typeof activeOrg?.name === "string" ? activeOrg.name : "";
+
+  // Seed the rename input from the active workspace name once it loads (and when
+  // it changes after a save), without clobbering in-progress typing.
+  useEffect(() => {
+    if (activeOrgName) setWorkspaceName(activeOrgName);
+  }, [activeOrgName]);
 
   const members: Member[] = Array.isArray(membersData?.members) ? membersData.members : [];
   const invites: Invite[] = Array.isArray(membersData?.invites) ? membersData.invites : [];
@@ -141,6 +158,35 @@ export default function TeamPage() {
     }
   };
 
+  const handleRename = async () => {
+    const name = workspaceName.trim();
+    if (!name || name === activeOrgName) return;
+    setBusy("rename");
+    setError(null);
+    setNameSaved(false);
+    try {
+      const res = await authedFetch("/api/org/rename", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(
+          data?.error === "name_too_long"
+            ? "Workspace name is too long (max 60 characters)."
+            : "Could not rename the workspace."
+        );
+        return;
+      }
+      // Refresh both this page's copy and the sidebar switcher (same SWR key).
+      await swrMutate("/api/org/list");
+      setNameSaved(true);
+      setTimeout(() => setNameSaved(false), 1500);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const canManage = yourRole === "owner" || yourRole === "admin";
   const isTeam = plan === "team";
 
@@ -198,6 +244,35 @@ export default function TeamPage() {
               Upgrade to Team
             </button>
           </div>
+        )}
+
+        {/* Workspace name */}
+        {canManage && (
+          <section className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-1 dark:text-gray-100 tracking-tight">Workspace name</h2>
+            <p className="text-sm text-gray-600 mb-4 dark:text-gray-400">
+              The name everyone on the team sees in the sidebar switcher. Rename it to your
+              company or team.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                maxLength={60}
+                placeholder="My Workspace"
+                value={workspaceName}
+                onChange={(e) => setWorkspaceName(e.target.value)}
+                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.02] text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500/40"
+              />
+              <button
+                type="button"
+                disabled={busy === "rename" || !workspaceName.trim() || workspaceName.trim() === activeOrgName}
+                onClick={handleRename}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
+              >
+                {busy === "rename" ? "Saving…" : nameSaved ? "Saved" : "Save"}
+              </button>
+            </div>
+          </section>
         )}
 
         {/* Invite */}

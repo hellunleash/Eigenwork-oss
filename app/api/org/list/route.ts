@@ -36,6 +36,10 @@ export async function GET(req: Request) {
           name: typeof od?.name === "string" ? od.name : "Workspace",
           plan: od?.plan ?? null,
           role: memberSnap.data()?.role ?? null,
+          // True when the caller owns this org. Lets the UI label the caller's
+          // own solo workspace as "Personal" so it isn't confused with a shared
+          // team workspace that happens to share the default "My Workspace" name.
+          isOwn: od?.ownerUserId === ctx.userId,
           isActive: orgId === activeOrgId,
         };
       })

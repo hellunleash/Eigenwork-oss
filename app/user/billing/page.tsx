@@ -119,6 +119,22 @@ export default function BillingPage() {
   if (authChecking) return <div className="min-h-screen bg-white dark:bg-[#0a0a0a]" />;
 
   const plan = me?.plan ?? "free";
+
+  // There's no extension/stacking in the backend: grantPass replaces the active
+  // pass, so buying your current tier again (or a lower tier) just forfeits the
+  // screens you have left — no refund, no carry-over. So the plan you're on, and
+  // anything below it, is shown as non-purchasing rather than a money-wasting CTA.
+  const singleState =
+    plan === "team"
+      ? { cta: "Included in Team", disabled: true, current: false }
+      : plan === "single_role"
+      ? { cta: "Current plan", disabled: true, current: true }
+      : { cta: "Get Single Role", disabled: false, current: false };
+  const teamState =
+    plan === "team"
+      ? { cta: "Current plan", disabled: true, current: true }
+      : { cta: "Get Team", disabled: false, current: false };
+
   const expiry =
     me?.expiresAtMs != null ? new Date(me.expiresAtMs).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
   const screenCap = me?.screenCap ?? 0;
@@ -197,7 +213,9 @@ export default function BillingPage() {
               "Candidate reports + CSV export",
               "Valid 60 days",
             ]}
-            cta={plan === "single_role" ? "Buy another" : "Get Single Role"}
+            current={singleState.current}
+            cta={singleState.cta}
+            disabled={singleState.disabled}
             onClick={() => checkout("single_role")}
             busy={busy === "single_role"}
           />
@@ -207,7 +225,7 @@ export default function BillingPage() {
             cadence="one-time · 6 months"
             tagline="Your whole hiring team, one workspace."
             highlight
-            current={plan === "team"}
+            current={teamState.current}
             features={[
               "Up to 10 active roles",
               "15,000 candidate screens",
@@ -215,7 +233,8 @@ export default function BillingPage() {
               "Ashby ATS push (soon)",
               "Basic pipeline analytics",
             ]}
-            cta={plan === "team" ? "Extend / buy again" : "Get Team"}
+            cta={teamState.cta}
+            disabled={teamState.disabled}
             onClick={() => checkout("team")}
             busy={busy === "team"}
           />
@@ -296,6 +315,7 @@ function PlanCard(props: {
   cta: string;
   onClick: () => void;
   busy?: boolean;
+  disabled?: boolean;
   highlight?: boolean;
   current?: boolean;
 }) {
@@ -320,9 +340,9 @@ function PlanCard(props: {
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-5">{props.cadence}</p>
       <button
         type="button"
-        disabled={props.busy}
+        disabled={props.busy || props.disabled}
         onClick={props.onClick}
-        className={`w-full py-2.5 rounded-lg text-sm font-medium mb-5 disabled:opacity-50 transition-colors ${
+        className={`w-full py-2.5 rounded-lg text-sm font-medium mb-5 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
           props.highlight
             ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200"
             : "border border-gray-200 dark:border-white/[0.1] text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/[0.04]"

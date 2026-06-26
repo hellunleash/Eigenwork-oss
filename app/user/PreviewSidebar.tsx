@@ -31,7 +31,7 @@ export type PreviewNavKey =
   | "billing";
 
 type Me = { plan: "free" | "single_role" | "team" | null; orgId: string | null };
-type Org = { orgId: string; name: string; plan: string | null; role: string | null; isActive: boolean };
+type Org = { orgId: string; name: string; plan: string | null; role: string | null; isOwn?: boolean; isActive: boolean };
 
 const fetcher = async (url: string) => {
   const token = await getIdTokenOrNull();
@@ -42,6 +42,15 @@ const fetcher = async (url: string) => {
 
 const notifySoon = (label: string) =>
   typeof window !== "undefined" && window.alert(`${label} isn’t wired up yet — coming soon.`);
+
+// Short label that distinguishes same-named workspaces in the switcher. A user's
+// own solo workspace (the auto-provisioned personal org) reads as "Personal" so
+// it isn't mistaken for a shared team workspace where they happen to be the
+// owner; shared workspaces show the caller's role (Owner / Admin / Member).
+const workspaceTag = (o: Pick<Org, "role" | "isOwn" | "plan">): string => {
+  if (o.isOwn && o.plan === "free") return "Personal";
+  return o.role ? o.role.charAt(0).toUpperCase() + o.role.slice(1) : "";
+};
 
 export function PreviewSidebar({
   collapsed,
@@ -85,8 +94,22 @@ export function PreviewSidebar({
   const plan = me?.plan ?? null;
 
   const activeOrg = orgs.find((o) => o.isActive) ?? orgs.find((o) => o.orgId === me?.orgId) ?? null;
+
+  // Once a user belongs to a paid (Single Role / Team) workspace, hide the
+  // throwaway personal Free workspace from the switcher — it shares nothing with
+  // the team and only adds clutter. The active org is always kept visible so the
+  // current selection is never orphaned.
+  const hasPaidOrg = orgs.some((o) => o.plan === "single_role" || o.plan === "team");
+  const switchableOrgs = orgs.filter(
+    (o) => o.isActive || !(hasPaidOrg && o.isOwn && o.plan === "free")
+  );
+
   const workspaceName = activeOrg?.name || "My Workspace";
-  const workspaceSub = plan === "team" ? "Team workspace" : plan === "single_role" ? "Single Role" : "Free workspace";
+  const planLabel = plan === "team" ? "Team workspace" : plan === "single_role" ? "Single Role" : "Free workspace";
+  // Append a tag so two same-named workspaces are distinguishable at a glance
+  // (e.g. "Team workspace · Admin" vs "Free workspace · Personal").
+  const activeTag = activeOrg ? workspaceTag(activeOrg) : "";
+  const workspaceSub = activeTag ? `${planLabel} · ${activeTag}` : planLabel;
 
   const displayName = user?.displayName || user?.email || "Account";
   const initials = (user?.displayName || user?.email || "?").trim().slice(0, 2).toUpperCase();
@@ -144,10 +167,12 @@ export function PreviewSidebar({
               </p>
               <p className="text-[11px] text-gray-500 truncate">{workspaceSub}</p>
             </div>
-            <SbChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+            {/* Only a chevron (the switch affordance) when there's more than one
+                workspace to switch to — otherwise it falsely looks clickable. */}
+            {switchableOrgs.length > 1 && <SbChevronDown className="w-4 h-4 text-gray-400 shrink-0" />}
           </>
         )}
-        {orgs.length > 1 && (
+        {switchableOrgs.length > 1 && (
           <select
             value={activeOrg?.orgId ?? ""}
             onChange={(e) => handleSwitchOrg(e.target.value)}
@@ -155,9 +180,10 @@ export function PreviewSidebar({
             aria-label="Switch workspace"
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           >
-            {orgs.map((o) => (
+            {switchableOrgs.map((o) => (
               <option key={o.orgId} value={o.orgId}>
                 {o.name}
+                {workspaceTag(o) ? ` · ${workspaceTag(o)}` : ""}
               </option>
             ))}
           </select>
@@ -249,7 +275,7 @@ export function PreviewSidebar({
                 </div>
               </button>
               {userMenuOpen && (
-                <div role="menu" className="absolute bottom-full left-0 mb-1 w-44 z-50 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#16161c] shadow-lg py-1">
+                <div role="menu" className="absolute bottom-full left-0 mb-1 w-44 z-50 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#161616] shadow-lg py-1">
                   <button type="button" role="menuitem" onClick={() => { setUserMenuOpen(false); handleLogout(); }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/[0.05]">Log out</button>
                 </div>
               )}

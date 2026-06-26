@@ -92,7 +92,7 @@ export default function JDInputPage() {
             >
               <div className="px-5 py-3 border-b border-gray-100 dark:border-white/[0.05] flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Raw job description</span>
-                <span className="text-xs text-gray-400 dark:text-gray-500">{text.length > 0 ? `${text.length.toLocaleString()} chars` : "Markdown supported"}</span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">{text.length > 0 ? `${text.length.toLocaleString()} chars` : "Plain text or markdown"}</span>
               </div>
               <textarea
                 value={text}
@@ -141,7 +141,7 @@ export default function JDInputPage() {
               <ol className="mt-4 space-y-4">
                 {[
                   { title: "Paste the JD", desc: "Copy from your ATS or a doc." },
-                  { title: "AI extraction", desc: "We structure the requirements instantly." },
+                  { title: "Extraction", desc: "We structure the requirements instantly." },
                   { title: "Review & publish", desc: "Tweak the criteria and start evaluating." },
                 ].map((step, i) => (
                   <li key={i} className="flex gap-3 items-start">

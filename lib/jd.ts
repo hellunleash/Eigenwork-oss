@@ -100,9 +100,11 @@ export type UpdateJdResult =
   | { ok: false; status: number; error: string };
 
 /**
- * Update an existing JD. Ownership: the original route checks the legacy per-user
- * owner (existing.userId === userId), NOT orgId — preserved verbatim. The role
- * limit is NOT re-checked on edits.
+ * Update an existing JD. Ownership is ORG-scoped to match close/delete (flat
+ * workspace, MVP): any member of the owning org can edit, so an owner/admin can
+ * fix a teammate's role rather than only its original creator. (Previously this
+ * gated on the legacy per-user owner, which left view/close/delete org-scoped
+ * but edit creator-only — an inconsistency.) The role limit is NOT re-checked.
  */
 export async function updateJd(
   orgId: string,
@@ -112,11 +114,15 @@ export async function updateJd(
 ): Promise<UpdateJdResult> {
   const db = getAdminDb();
   const existing = await db.collection("jds").doc(jobId).get();
-  const existingUserId = existing.data()?.userId;
-  if (existingUserId && existingUserId !== userId) {
+  const data = existing.data();
+  const ownerOrg = data?.orgId;
+  if (!ownerOrg || ownerOrg !== orgId) {
     return { ok: false, status: 403, error: "forbidden" };
   }
-  await db.collection("jds").doc(jobId).update(buildJdPayload(input, orgId, userId));
+  // Preserve the original creator's userId so an owner/admin editing a teammate's
+  // JD doesn't reassign its authorship to themselves.
+  const creatorUserId = typeof data?.userId === "string" && data.userId ? data.userId : userId;
+  await db.collection("jds").doc(jobId).update(buildJdPayload(input, orgId, creatorUserId));
   return { ok: true, jobId };
 }
 

@@ -4,6 +4,8 @@ import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { usePageTitle } from "@/lib/use-page-title";
+import { PreviewSidebar } from "../../PreviewSidebar";
 import { cleanTitle, buildOneLiner } from "@/lib/jd-role-fit";
 import {
   WORK_AUTH_OPTIONS,
@@ -76,6 +78,7 @@ function SectionCard({
 function JDConfirmContent() {
   const router = useRouter();
   const [authChecking, setAuthChecking] = useState(true);
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [form, setForm] = useState<JDForm | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -88,6 +91,7 @@ function JDConfirmContent() {
 
   const searchParams = useSearchParams();
   const jobIdFromUrl = searchParams.get("jobId");
+  usePageTitle(jobIdFromUrl ? "Edit Role" : "Review & Confirm");
 
   useEffect(() => {
     const loadInitial = async () => {
@@ -160,7 +164,7 @@ function JDConfirmContent() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
+      <div className="min-h-screen bg-white dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Checking authentication…</p>
@@ -171,7 +175,7 @@ function JDConfirmContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
+      <div className="min-h-screen bg-white dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>
@@ -181,7 +185,7 @@ function JDConfirmContent() {
   }
   if (!form) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex flex-col items-center justify-center px-6">
+      <div className="min-h-screen bg-white dark:bg-[#0a0a0a] flex flex-col items-center justify-center px-6">
         <div className="max-w-md w-full text-center animate-fade-in">
           <div className="mb-6">
             <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -280,37 +284,31 @@ function JDConfirmContent() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100 antialiased">
-      {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-[#0a0a0a]/80 backdrop-blur-md">
-        <div className="max-w-4xl mx-auto px-6 h-14 grid grid-cols-[1fr_auto_1fr] items-center">
-          <button
-            onClick={() => router.push("/user/dashboard")}
-            className="justify-self-start text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition flex items-center gap-1.5 group"
-          >
-            <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back to dashboard
-          </button>
-          <span className="justify-self-center text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">
-            EigenWork
-          </span>
-          <div />
-        </div>
-      </header>
+    <div
+      className={`min-h-screen bg-white dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100 antialiased transition-[padding] duration-300 ${
+        navCollapsed ? "lg:pl-[68px]" : "lg:pl-[260px]"
+      }`}
+    >
+      <PreviewSidebar active="pipelines" collapsed={navCollapsed} onToggle={() => setNavCollapsed((v) => !v)} />
 
-      <main className="max-w-4xl mx-auto px-6 py-10 md:py-12">
-        {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
+      {/* Header */}
+      <div className="border-b border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#0a0a0a] sticky top-0 z-30">
+        <div className="max-w-4xl mx-auto px-6 lg:px-10 py-5">
+          <nav className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mb-1">
+            <a href="/user/pipelines" className="hover:text-gray-900 dark:hover:text-gray-200">Role pipelines</a>
+            <ChevronTiny />
+            <span className="text-gray-700 dark:text-gray-200 font-medium">{jobIdFromUrl ? "Edit role" : "New role"}</span>
+          </nav>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">
             {jobIdFromUrl ? "Edit Role" : "Review & Confirm"}
           </h1>
-          <p className="mt-2 text-gray-500 dark:text-gray-400">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             {jobIdFromUrl ? "Update your role details and settings" : "Review the extracted details and configure your pipeline"}
           </p>
         </div>
+      </div>
 
+      <div className="max-w-4xl mx-auto px-6 lg:px-10 py-8">
         {/* Error */}
         {error && (
           <div className="mb-6 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded-xl p-4 flex items-start gap-3 animate-fade-in">
@@ -630,15 +628,19 @@ function JDConfirmContent() {
             )}
           </button>
         </div>
-      </main>
+      </div>
     </div>
   );
+}
+
+function ChevronTiny() {
+  return <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>;
 }
 
 export default function JDConfirmPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex items-center justify-center">
+      <div className="min-h-screen bg-white dark:bg-[#0a0a0a] flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-gray-200 dark:border-white/[0.1] border-t-emerald-500 mb-4"></div>
           <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse-subtle">Loading…</p>

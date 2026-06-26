@@ -196,7 +196,6 @@ export default function DashboardPage() {
   const screensRemaining = entitlement?.screensRemaining ?? 0;
   const walletBalance = entitlement?.walletBalance ?? 0;
   const roleLimit = entitlement?.roleLimit ?? 0;
-  const atsEnabled = entitlement?.atsEnabled ?? false;
   const usedPct = screenCap > 0 ? Math.min(100, Math.round((screensUsed / screenCap) * 100)) : 0;
   const expiresLabel =
     entitlement?.expiresAtMs != null
@@ -475,8 +474,6 @@ export default function DashboardPage() {
             <ul className="mt-5 space-y-2.5 text-xs text-gray-600 dark:text-gray-300">
               <li className="flex items-center justify-between"><span>Roles allowed</span><span className="font-medium text-gray-900 dark:text-gray-100 tabular-nums">{activeRoles} / {roleLimit}</span></li>
               <li className="flex items-center justify-between"><span>Wallet balance</span><span className="font-medium text-gray-900 dark:text-gray-100 tabular-nums">{walletBalance.toLocaleString()}</span></li>
-              <li className="flex items-center justify-between"><span>ATS push</span><span className={`font-medium ${atsEnabled ? "text-emerald-600 dark:text-emerald-400" : "text-gray-400 dark:text-gray-500"}`}>{atsEnabled ? "Enabled" : "—"}</span></li>
-              <li className="flex items-center justify-between"><span>Outcome analytics</span><span className="font-medium text-gray-400 dark:text-gray-500">Locked</span></li>
             </ul>
 
             <div className="mt-5 grid grid-cols-2 gap-2">

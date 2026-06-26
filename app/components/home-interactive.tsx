@@ -38,7 +38,7 @@ function EtiScaleBubble({ align = "left" }: { align?: "left" | "right" }) {
       className={`absolute ${align === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left"} top-full mt-2 z-50 animate-etipopover`}
       role="tooltip"
     >
-      <div className="bg-white dark:bg-[#15151b] rounded-lg border border-gray-200 dark:border-white/[0.08] shadow-lg py-3 px-4 min-w-[300px]">
+      <div className="bg-white dark:bg-[#15151b] rounded-lg border border-gray-200 dark:border-white/[0.08] shadow-lg py-3 px-4 min-w-[300px] max-w-[340px]">
         <div className="flex gap-1 w-full">
           <div className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 rounded-md bg-amber-100 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px] font-medium">
             <span>50–64</span>
@@ -53,6 +53,9 @@ function EtiScaleBubble({ align = "left" }: { align?: "left" | "right" }) {
             <span className="text-center leading-tight">Low supervision. High Leverage</span>
           </div>
         </div>
+        <p className="mt-2.5 text-[10px] leading-snug text-gray-500 dark:text-gray-400">
+          Calibrated to the role&rsquo;s level. Interns and juniors are scored against a junior&rsquo;s scope, so their ceiling is lower — for an intern or junior role, a score near 65 is already very strong. Read each band against the role&rsquo;s seniority, not as an absolute grade.
+        </p>
       </div>
     </div>
   );

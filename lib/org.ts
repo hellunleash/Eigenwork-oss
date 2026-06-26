@@ -16,7 +16,7 @@
  *   orgs/{orgId}/members/{uid}       { role, joinedAt }
  *   userOrgs/{uid}                   { orgIds[], activeOrgId, updatedAt }
  */
-import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
+import { getAdminDb, getAdminAuth, FieldValue } from "@/lib/firebase-admin";
 import { requireFirebaseUser, type AuthResult } from "@/lib/auth-server";
 
 export type OrgRole = "owner" | "admin" | "member";
@@ -32,6 +32,35 @@ export type OrgContext =
 
 function asRole(value: unknown): OrgRole | null {
   return value === "owner" || value === "admin" || value === "member" ? value : null;
+}
+
+/**
+ * Derive a friendly name for a user's auto-provisioned personal org from their
+ * Firebase profile (display name, else the email local-part), so two users don't
+ * both land on a generic "My Workspace" — the name collision that made the
+ * workspace switcher ambiguous. Best-effort: falls back to "My Workspace".
+ */
+async function personalWorkspaceName(userId: string): Promise<string> {
+  try {
+    const u = await getAdminAuth().getUser(userId);
+    const base =
+      (u.displayName && u.displayName.trim()) ||
+      (u.email && u.email.includes("@") ? u.email.split("@")[0] : "");
+    if (base) return `${base}’s Workspace`;
+  } catch {
+    /* fall through to the generic default */
+  }
+  return "My Workspace";
+}
+
+/** Rename a workspace (org). The caller must already be authorized as owner/admin
+ *  — enforced by the /api/org/rename route, not here. */
+export async function updateOrgName(orgId: string, name: string): Promise<void> {
+  const db = getAdminDb();
+  await db
+    .collection(ORGS_COLLECTION)
+    .doc(orgId)
+    .set({ name, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 }
 
 /**
@@ -51,6 +80,10 @@ export async function ensurePersonalOrg(userId: string): Promise<string> {
     return fastData.activeOrgId;
   }
 
+  // About to create — derive a friendly workspace name from the user's profile
+  // outside the transaction (best-effort; a getUser read can't run inside it).
+  const workspaceName = await personalWorkspaceName(userId);
+
   // Auto-id is generated client-side (no round trip), so the org create can sit
   // inside the transaction alongside the userOrgs write.
   const newOrgRef = db.collection(ORGS_COLLECTION).doc();
@@ -67,7 +100,7 @@ export async function ensurePersonalOrg(userId: string): Promise<string> {
     // after a device-fingerprint + Turnstile check (free-tier abuse guard). A
     // freshly provisioned org therefore has no active pass until claimed.
     tx.set(newOrgRef, {
-      name: "My Workspace",
+      name: workspaceName,
       ownerUserId: userId,
       plan: "free" satisfies OrgPlan,
       createdAt: FieldValue.serverTimestamp(),

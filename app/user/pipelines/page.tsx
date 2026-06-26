@@ -10,8 +10,9 @@
 //   • Shortlist        → POST /match then POST /close (confirm modal)
 //   • kebab            → Copy intake link (paused-gated) · Edit settings · Delete
 //   • bulk bar         → Copy links · Close · Export CSV · Delete (selected)
-// Controls that have no backing yet (Copy default intake link, source attribution)
-// are KEPT as designed and flagged "coming soon" on use — not stripped.
+// Controls that have no backing yet (source attribution) are KEPT as designed and
+// flagged "coming soon" on use — not stripped. ("Copy default intake link" was
+// removed — there is no org-wide default intake link, only per-pipeline links.)
 
 export const dynamic = "force-dynamic";
 
@@ -368,9 +369,6 @@ export default function PipelinesV2Page() {
               <p className="text-sm text-gray-500 dark:text-gray-400">Create roles, collect submissions through your intake link, and build a shortlist when the pool is full.</p>
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => notifySoon("Default intake link")} className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/[0.08] hover:bg-gray-50 dark:hover:bg-white/[0.04]">
-                <IconLink /> Copy default intake link
-              </button>
               <button type="button" onClick={() => router.push("/user/jd")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-white dark:text-gray-900 bg-gray-900 dark:bg-gray-100 hover:bg-gray-800 dark:hover:bg-gray-200">
                 <IconPlus /> New pipeline
               </button>
@@ -738,12 +736,12 @@ function RowActionMenu({ p, actions }: { p: Pipeline; actions: RowActions }) {
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.5" /><circle cx="10" cy="10" r="1.5" /><circle cx="16" cy="10" r="1.5" /></svg>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 top-full mt-1 w-44 z-20 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#16161c] shadow-lg py-1">
+        <div role="menu" className="absolute right-0 top-full mt-1 w-44 z-20 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-[#161616] shadow-lg py-1">
           <button type="button" role="menuitem" disabled={paused} onClick={() => { if (!paused) { actions.onCopy(p.id); setOpen(false); } }} title={paused ? "Intake links are paused — add screens to resume." : undefined} className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 ${paused ? "text-gray-400 dark:text-gray-600 cursor-not-allowed" : "text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/[0.05]"}`}>
             <IconLink /> Copy intake link
           </button>
           <button type="button" role="menuitem" onClick={() => { actions.onEdit(p.id); setOpen(false); }} className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/[0.05]">
-            <IconGear /> Edit settings
+            <IconGear /> Edit role settings
           </button>
           <div className="my-1 h-px bg-gray-100 dark:bg-white/[0.06]" />
           <button type="button" role="menuitem" onClick={() => { actions.onDelete(p); setOpen(false); }} className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10">

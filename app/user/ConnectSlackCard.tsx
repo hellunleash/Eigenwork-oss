@@ -27,10 +27,33 @@ const toneClasses: Record<Tone, string> = {
 export function ConnectSlackCard() {
   const [connecting, setConnecting] = useState(false);
   const [status, setStatus] = useState<{ tone: Tone; text: string } | null>(null);
+  // Real server-side connection state (independent of the post-OAuth banner), so
+  // the button reflects the install on every mount — not just right after OAuth.
+  const [installed, setInstalled] = useState(false);
 
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get("slack");
     if (s && STATUS_COPY[s]) setStatus(STATUS_COPY[s]);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const token = await getIdTokenOrNull();
+        const res = await fetch("/api/slack/status", {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { connected?: boolean };
+        if (active && data.connected) setInstalled(true);
+      } catch {
+        /* leave as not-installed; the Connect button still works */
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const connect = async () => {
@@ -56,7 +79,7 @@ export function ConnectSlackCard() {
     }
   };
 
-  const connected = status?.tone === "ok";
+  const connected = installed || status?.tone === "ok";
 
   return (
     <section className="rounded-2xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.02] p-5 lg:p-6">

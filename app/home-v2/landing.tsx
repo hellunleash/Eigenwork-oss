@@ -1,18 +1,23 @@
 "use client";
 
+// The main landing IS the promoted draft composition (formerly only at
+// /home-v2/preview/landing). Slack-native + multi-entry redesign: it reuses the
+// already-built sections-draft components verbatim — nothing here is rewritten.
+// `/` re-exports this file's default, so this is the single source of truth for
+// the homepage.
+
 import { useState } from "react";
 import { HomeLoginModal } from "../components/home-login-modal";
 
 import { Reveal } from "./motion";
-import { Nav } from "./sections/nav";
-import { Hero } from "./sections/hero";
-import { TrustStrip } from "./sections/trust-strip";
-import { Problem } from "./sections/problem";
-import { Workflow } from "./sections/workflow";
-import { Showcase } from "./sections/showcase";
-import { Why } from "./sections/why";
-import { ComparePricing } from "./sections/compare-pricing";
-import { TestimonialsFaq } from "./sections/testimonials-faq";
+import { Nav } from "./sections-draft/nav";
+import { Hero } from "./sections-draft/hero";
+import { FrontDoors } from "./sections-draft/front-doors";
+import { Showcase } from "./sections-draft/showcase";
+import { Why } from "./sections-draft/why";
+import { AnalyticsPeek } from "./sections-draft/analytics-peek";
+import { Pricing } from "./sections-draft/pricing";
+import { TestimonialsFaq } from "./sections-draft/testimonials-faq";
 import { CtaFooter } from "./sections/cta-footer";
 
 export default function HomeV2() {
@@ -23,12 +28,11 @@ export default function HomeV2() {
     <div className="min-h-screen bg-white dark:bg-[#0a0a0a] text-zinc-900 dark:text-zinc-100 antialiased">
       <Nav onSignIn={open} />
       <Hero onCta={open} />
-      <Reveal><TrustStrip /></Reveal>
-      <Reveal stagger><Problem /></Reveal>
-      <Reveal stagger><Workflow /></Reveal>
+      <Reveal><FrontDoors /></Reveal>
       <Reveal><Showcase /></Reveal>
-      <Reveal><Why /></Reveal>
-      <Reveal><ComparePricing onCta={open} /></Reveal>
+      <Why />
+      <Reveal><AnalyticsPeek /></Reveal>
+      <Reveal><Pricing onCta={open} /></Reveal>
       <Reveal><TestimonialsFaq /></Reveal>
       <Reveal><CtaFooter onCta={open} /></Reveal>
       <HomeLoginModal show={showLogin} onClose={() => setShowLogin(false)} />
