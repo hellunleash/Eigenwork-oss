@@ -12,7 +12,7 @@ import { getIdTokenOrNull } from "@/lib/auth-client";
 
 type Tone = "ok" | "warn" | "err";
 const STATUS_COPY: Record<string, { tone: Tone; text: string }> = {
-  connected: { tone: "ok", text: "Slack connected. @mention EigenBot in your workspace to try it." },
+  connected: { tone: "ok", text: "Slack connected — mention @Eigenwork in your workspace to start." },
   denied: { tone: "warn", text: "Slack connection was cancelled." },
   invalid: { tone: "err", text: "That Slack link expired — please connect again." },
   error: { tone: "err", text: "Couldn't finish connecting Slack. Please try again." },
@@ -95,7 +95,9 @@ export function ConnectSlackCard() {
           </div>
           <p className="mt-1.5 text-sm text-gray-600 dark:text-gray-300 max-w-lg">
             Ask about your candidates, compare them, and spin up intake links — right inside Slack.
-            @mention the bot and it answers from your screened pipeline, no dashboard needed.
+            Mention{" "}
+            <code className="font-mono text-[0.8rem] px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">@Eigenwork</code>{" "}
+            in any channel — or DM it — and it answers from your screened pipeline, no dashboard needed.
           </p>
         </div>
         <button

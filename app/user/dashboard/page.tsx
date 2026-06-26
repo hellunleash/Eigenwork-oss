@@ -431,24 +431,29 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* BOTTOM — Shortlist quality rate (sample) + Plan & usage (real) + Onboarding (derived) */}
+        {/* BOTTOM — Shortlist quality rate (Team analytics) + Plan & usage (real) + Onboarding (derived) */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {/* Shortlist quality rate — moved from the analytics page (sample figures) */}
-          <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6">
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <KpiLabel icon={<IconStack />}>Shortlist quality rate</KpiLabel>
-                <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{shortlistTop10Pct}<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
-                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">{shortlistHeadlineSub}</p>
+          {/* Shortlist quality rate — Team-tier analytics (ADR-009). Free/Single see a
+              locked teaser instead of the sample figures, which read as real data. */}
+          {plan === "team" ? (
+            <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6">
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <KpiLabel icon={<IconStack />}>Shortlist quality rate</KpiLabel>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50 tabular-nums">{shortlistTop10Pct}<span className="text-base font-normal text-gray-400 ml-0.5">%</span> <span className="text-sm font-medium text-gray-500 dark:text-gray-400">top-10 clear rate</span></p>
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">{shortlistHeadlineSub}</p>
+                </div>
+                <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">{shortlistCountLabel} shortlisted<br />{shortlistWindowLabel}</span>
               </div>
-              <span className="text-[10.5px] text-gray-500 dark:text-gray-400 font-medium text-right">{shortlistCountLabel} shortlisted<br />{shortlistWindowLabel}</span>
+              <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400 mb-2">Interview-clear rate by shortlist depth</p>
+              <ul className="space-y-2.5">
+                {shortlistTiers.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
+              </ul>
+              <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">Top 20 clears at {shortlistTop20Pct}% vs {shortlistTop10Pct}% for the top 10 — the back half dilutes, so your value is the top 10.</p>
             </div>
-            <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400 mb-2">Interview-clear rate by shortlist depth</p>
-            <ul className="space-y-2.5">
-              {shortlistTiers.map((t) => <ShortlistTierRow key={t.label} t={t} />)}
-            </ul>
-            <p className="mt-3 text-[10.5px] text-gray-500 dark:text-gray-400 leading-snug">Top 20 clears at {shortlistTop20Pct}% vs {shortlistTop10Pct}% for the top 10 — the back half dilutes, so your value is the top 10.</p>
-          </div>
+          ) : (
+            <ShortlistQualityLocked onUpgrade={() => router.push("/user/billing")} />
+          )}
 
           {/* Plan & usage — REAL entitlement (filled-v2 styling) */}
           <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6">
@@ -576,6 +581,45 @@ function EmptyKpiTile({ className = "", accent = "sky", padding = "p-4", childre
   const rail = { sky: "before:bg-sky-500/40", emerald: "before:bg-emerald-500/40", amber: "before:bg-amber-500/40", teal: "before:bg-teal-500/40", rose: "before:bg-rose-500/40" }[accent];
   return <div className={`relative bg-white dark:bg-white/[0.02] rounded-xl border border-gray-200/80 dark:border-white/[0.06] ${padding} overflow-hidden before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[2px] before:rounded-r ${rail} ${className}`}>{children}</div>;
 }
+// Free / Single see this instead of the sample shortlist figures: a locked teaser
+// that shows WHAT the metric reveals (and the structure) without presenting any
+// fake numbers as real, plus a path to unlock it on Team.
+function ShortlistQualityLocked({ onUpgrade }: { onUpgrade: () => void }) {
+  const teaser = [
+    { label: "Top 10", width: "62%" },
+    { label: "Top 20", width: "46%" },
+    { label: "Ranks 11–20", width: "32%" },
+  ];
+  return (
+    <div className="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200/80 dark:border-white/[0.06] p-5 lg:p-6">
+      <div className="flex items-start justify-between mb-3">
+        <div className="min-w-0">
+          <KpiLabel icon={<IconStack />}>Shortlist quality rate</KpiLabel>
+          <p className="mt-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 leading-snug max-w-[17rem]">See which shortlist depth actually clears interviews — top-10 vs top-20 clear rates, tracked as you hire.</p>
+        </div>
+        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10.5px] font-semibold tracking-wide bg-zinc-100 text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-300"><IconLock /> Team</span>
+      </div>
+      <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 dark:text-gray-500 mb-2">Interview-clear rate by shortlist depth</p>
+      <ul className="space-y-2.5" aria-hidden="true">
+        {teaser.map((t) => (
+          <li key={t.label} className="grid grid-cols-12 items-center gap-3">
+            <p className="col-span-4 text-xs font-medium text-gray-400 dark:text-gray-500">{t.label}</p>
+            <div className="col-span-5">
+              <div className="w-full h-2 bg-gray-100 dark:bg-white/[0.05] rounded-full overflow-hidden">
+                <div className="h-full rounded-full bg-gray-200 dark:bg-white/[0.08]" style={{ width: t.width }} />
+              </div>
+            </div>
+            <span className="col-span-3 text-right text-sm font-semibold text-gray-300 dark:text-gray-600 tabular-nums">—%</span>
+          </li>
+        ))}
+      </ul>
+      <button type="button" onClick={onUpgrade} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-sky-600 dark:text-sky-400 hover:underline">Unlock with Team <IconArrowRight /></button>
+    </div>
+  );
+}
+
+function IconLock() { return <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4m-1 0h10a1 1 0 011 1v7a1 1 0 01-1 1H7a1 1 0 01-1-1v-7a1 1 0 011-1z" /></svg>; }
+
 function KpiLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return <p className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400"><span className="text-gray-400 dark:text-gray-500">{icon}</span>{children}</p>;
 }
