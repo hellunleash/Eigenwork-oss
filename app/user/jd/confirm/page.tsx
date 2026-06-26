@@ -572,7 +572,12 @@ function JDConfirmContent() {
             desc="Configure applicant intake limits"
           >
             <div>
-              <label className={LABEL}>Applicant Limit</label>
+              <label className={LABEL}>
+                Applicant Limit
+                <span className="ml-2 text-xs font-normal text-gray-400 dark:text-gray-500">
+                  (editable anytime from a pipeline&rsquo;s Actions menu, until its shortlist is generated)
+                </span>
+              </label>
               <input
                 ref={submissionCapInputRef}
                 type="number"
