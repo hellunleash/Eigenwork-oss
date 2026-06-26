@@ -4,21 +4,27 @@ import { getInstallation } from "@/lib/slack/installations";
 import { resolveSlackActor } from "@/lib/slack/auth";
 import { slackUpdateMessage } from "@/lib/slack/client";
 import { moveStage, STAGES, OUTCOMES, type Stage, type Outcome } from "@/lib/stage";
+import { runMatch } from "@/lib/match";
+import { asDraft, finalizeIntake } from "@/lib/agent/intake";
 import { logAgentRun } from "@/lib/agent/audit";
-import { getRequestId, log } from "@/lib/server-logger";
+import { getRequestId, log, type LogContext } from "@/lib/server-logger";
 
 /**
- * Slack interactivity endpoint (ADR-010 Phase 4 — the soft-gate transport).
- *
- * Handles the Confirm/Cancel buttons on a move_stage proposal. The button click
- * is the in-thread confirm; on Confirm we execute moveStage (which RE-CHECKS org
- * ownership, so a tampered payload can't move another org's candidate) and edit
- * the message to a result. The clicking user is the audit actor.
+ * Slack interactivity endpoint (ADR-010 Phase 4 + ADR-012 — the write-confirm
+ * transport). The button click IS the human confirm for every proposal-only write
+ * the agent can make: move_stage (existing), and — for the tool-calling loop —
+ * run_match and create_intake. On Confirm we execute the real `lib/` mutation,
+ * which RE-CHECKS org ownership server-side from the RESOLVED actor (never the
+ * payload), so a tampered/replayed payload can't act on another org. The clicking
+ * user is the audit actor. This is the load-bearing T1/T3 boundary: nothing mutates
+ * until here.
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// run_match (ADR-012 confirm) runs the real match inline; bot-plan pools are small,
+// but give the same headroom the events route has.
+export const maxDuration = 60;
 
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET ?? "";
 
@@ -138,6 +144,79 @@ export async function POST(req: Request) {
             ? `✅ Moved ${moved === 1 ? "the candidate" : `${moved} candidates`} to *${stage}*.`
             : `Moved ${moved} of ${ids.length} to *${stage}* — the rest couldn't be updated.`;
         await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text, blocks: [] });
+        return;
+      }
+
+      // --- ADR-012 tool-loop write confirms -----------------------------------
+
+      if (action.action_id === "match_cancel" || action.action_id === "intake_cancel") {
+        await slackUpdateMessage(installation.botToken, {
+          channel,
+          ts: messageTs,
+          text: action.action_id === "match_cancel" ? "Cancelled — no match run." : "Cancelled — no role created.",
+          blocks: [],
+        });
+        return;
+      }
+
+      if (action.action_id === "match_confirm") {
+        let parsed: { jobId?: unknown; title?: unknown } = {};
+        try {
+          parsed = JSON.parse(action.value ?? "{}");
+        } catch {
+          /* invalid below */
+        }
+        const jobId = typeof parsed.jobId === "string" ? parsed.jobId : "";
+        const title = typeof parsed.title === "string" && parsed.title ? parsed.title : "the role";
+        if (!jobId) {
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "That action expired or was invalid — ask me again.", blocks: [] });
+          return;
+        }
+        await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: `Running the match for *${title}*… :mag:`, blocks: [] });
+        // Ownership re-checked from the RESOLVED actor's org (never the payload) — T3.
+        const ctx: LogContext = { requestId, route: "/api/slack/interactivity", userId: actor.userId, jobId };
+        const ownsJd = (jd: Record<string, unknown>) => typeof jd.orgId === "string" && jd.orgId === actor.orgId;
+        const res = await runMatch(jobId, ctx, ownsJd);
+        if (!res.success) {
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "I couldn't run that match just now — please try again.", blocks: [] });
+          return;
+        }
+        const n = res.top20?.length ?? 0;
+        void logAgentRun({
+          orgId: actor.orgId,
+          userId: actor.userId,
+          surface: "slack",
+          kind: "action",
+          teamId,
+          channel,
+          slackUserId,
+          detail: { action: "run_match", jobId, count: n },
+        });
+        const text =
+          n > 0
+            ? `✅ Shortlist rebuilt for *${title}* — *${n}* candidate${n === 1 ? "" : "s"}. Ask me *who are my top candidates for ${title}?*`
+            : `I ran the match for *${title}*, but no applicants cleared the bar yet.`;
+        await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text, blocks: [] });
+        return;
+      }
+
+      if (action.action_id === "intake_confirm") {
+        let parsed: { draft?: unknown } = {};
+        try {
+          parsed = JSON.parse(action.value ?? "{}");
+        } catch {
+          /* invalid below */
+        }
+        const draft = asDraft((parsed.draft ?? null) as Record<string, unknown> | null);
+        if (!draft) {
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "That draft expired or was invalid — ask me to create the intake link again.", blocks: [] });
+          return;
+        }
+        // finalizeIntake injects org/user from the RESOLVED actor and logs its own
+        // create_intake action; createJd re-checks the active-role limit (T1/T3).
+        const out = await finalizeIntake(actor.orgId, actor.userId, draft, { teamId, channel, slackUserId });
+        await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: out, blocks: [] });
+        return;
       }
     } catch (err) {
       log("error", "slack.interactivity_failed", { requestId, teamId }, err);

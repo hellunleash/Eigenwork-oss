@@ -83,3 +83,56 @@ export function buildMailto(email: string, draft: OutreachDraft): string {
   const query = params.toString().replace(/\+/g, "%20");
   return `mailto:${encodeURIComponent(email)}?${query}`;
 }
+
+export type OutreachItem = {
+  name: string;
+  email: string | null;
+  roleTitle?: string | null;
+  cardTitle?: string | null;
+  cardEdge?: string | null;
+};
+
+/**
+ * Render the bot's recruiter-facing outreach reply (ADR-011 capability gate).
+ * Shared by both the router path and the tool path so the gate can't fork.
+ *
+ *   - PAID org (any active paid pass): full, ready-to-send drafts — a personalized
+ *     email per candidate with a one-click `mailto:` the recruiter sends themselves.
+ *   - FREE org: a factual TEASE — ONE real personalized preview (subject + the
+ *     standout opener line) plus an upgrade nudge. The value is visible; only the
+ *     send-ready drafts for the shortlist are gated to a paid plan.
+ */
+export function renderOutreachReply(items: OutreachItem[], paid: boolean): string {
+  if (items.length === 0) return "I couldn't load that candidate's details.";
+
+  if (!paid) {
+    const first = items[0];
+    const draft = composeOutreach({
+      candidateName: first.name,
+      roleTitle: first.roleTitle ?? null,
+      cardTitle: first.cardTitle ?? null,
+      cardEdge: first.cardEdge ?? null,
+    });
+    const opener = draft.body.split("\n")[2] ?? ""; // the personalized standout line
+    return [
+      `✍️ Here's a preview of the interview outreach I'd send *${first.name}*:`,
+      `_Subject:_ ${draft.subject}`,
+      opener,
+      "",
+      "Ready-to-send outreach for your whole shortlist — personalized per candidate, one click to your inbox — is on the paid plans. *Upgrade* and I'll draft and queue it for anyone you pick.",
+    ].join("\n");
+  }
+
+  const parts = items.map((d) => {
+    const draft = composeOutreach({
+      candidateName: d.name,
+      roleTitle: d.roleTitle ?? null,
+      cardTitle: d.cardTitle ?? null,
+      cardEdge: d.cardEdge ?? null,
+    });
+    if (!d.email) return `*${d.name}* — no email on file, can't draft outreach.`;
+    const mailto = buildMailto(d.email, draft);
+    return `*${d.name}* — _${draft.subject}_\n${draft.body}\n<${mailto}|📧 Open in your email to send>`;
+  });
+  return parts.join("\n\n———\n\n");
+}

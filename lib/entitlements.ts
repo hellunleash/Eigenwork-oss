@@ -247,6 +247,17 @@ export async function canUseAts(orgId: string): Promise<boolean> {
   return Boolean(pass && pass.atsEnabled && passIsValid(pass, Date.now()));
 }
 
+/**
+ * Does this org's plan unlock the bot's "does the work" writes — specifically
+ * draft_outreach (ADR-011 capability gate)? True for any ACTIVE PAID pass
+ * (single_role + team), false for Free / no pass. Free orgs still SEE the feature
+ * (a teased preview); only the full ready-to-send drafts are gated.
+ */
+export async function canUseBotWrites(orgId: string): Promise<boolean> {
+  const pass = await getActivePass(orgId);
+  return Boolean(pass && pass.kind !== "free" && passIsValid(pass, Date.now()));
+}
+
 /** Dashboard / billing-UI summary for an org. */
 export async function getEntitlementSummary(orgId: string): Promise<{
   plan: PassKind | null;

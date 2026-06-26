@@ -1,16 +1,22 @@
 #!/usr/bin/env -S npx tsx
 // scripts/agent-cost-probe.ts
 //
-// ADR-011 cost basis. Exercises the REAL agent turn (lib/agent/loop.ts ->
-// router + synthesis + judge) for one message of each kind, against the live
-// org roster, and prints the MEASURED Gemini token usage + dollar cost per
-// kind (intercepted from the agent.gemini_usage log lines). No Slack, no
-// Vercel log-scraping. Read-only: it runs runAgentTurn for the read/synthesis/
-// move/outreach intents (which never write candidate or JD state) and, for
-// create_intake, only routes (so it does NOT create a junk role).
+// ADR-011/012 cost basis. Exercises the REAL agent turn (lib/agent/loop.ts ->
+// the bounded tool-calling loop, AGENT_MODE=tools) for one message of several
+// scenarios, against the live org roster, and prints the MEASURED Gemini token
+// usage + dollar cost per scenario (intercepted from the agent.gemini_usage log
+// lines: the flash-lite scope gate + each gemini-2.5-flash tool-loop step). No
+// Slack, no Vercel log-scraping.
+//
+// Read/PROPOSE-only: in the loop, writes (move_stage / create_intake /
+// draft_outreach) only PROPOSE a confirm card — they never mutate — so this runs
+// them as full turns safely (no junk role, no stage change). A bare greeting
+// ("help") short-circuits to deterministic help text with ZERO LLM calls, so it
+// shows no cost row.
 //
 // Usage:  npx tsx scripts/agent-cost-probe.ts
-// Env:    reads .env.local (GEMINI_API_KEY, FIREBASE_SERVICE_ACCOUNT_KEY, ...)
+// Env:    reads .env.local (GEMINI_API_KEY, FIREBASE_SERVICE_ACCOUNT_KEY, ...);
+//         forces AGENT_MODE=tools regardless of ambient env.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -43,6 +49,7 @@ type Sample = { kind: string; label: string; inputTokens: number; outputTokens: 
 
 async function main(): Promise<void> {
   await loadEnv();
+  process.env.AGENT_MODE = "tools"; // measure the tool-calling loop regardless of ambient env
 
   // Intercept the agent.gemini_usage log lines (server-logger uses console.log
   // for info level) and attribute each to the kind currently under test.
@@ -66,7 +73,6 @@ async function main(): Promise<void> {
   // Lazy-import after env load so firebase-admin sees the service account.
   const { getAdminDb } = await import("@/lib/firebase-admin");
   const { runAgentTurn } = await import("@/lib/agent/loop");
-  const { routeMessage } = await import("@/lib/agent/router");
   const { listJobs, getOrgCandidateRoster } = await import("@/lib/agent/data");
 
   // Discover the connected org from slack_installations (the org the live bot serves).
@@ -112,19 +118,26 @@ async function main(): Promise<void> {
   origLog("");
 
   const userId = instSnap.docs[0].data().installerUid as string;
-  const turn = (text: string) => runAgentTurn({ orgId, userId, text, surface: "slack" } as Parameters<typeof runAgentTurn>[0]);
+  // Each scenario gets its own convoKey so the loop can carry tool results across
+  // its own steps; names are real roster names so the loop's tools resolve them.
+  const turn = (text: string, convoKey: string) =>
+    runAgentTurn({ orgId, userId, text, convoKey } as Parameters<typeof runAgentTurn>[0]);
 
-  // The message of each kind. Names are real roster names so the router resolves them.
+  // One message per scenario. In tools mode each is a scope-gate + a bounded loop;
+  // writes propose a confirm card and never mutate, so all are safe as full turns.
+  const stamp = Date.now();
   const kinds: { kind: string; text: string; run: () => Promise<unknown> }[] = [
-    { kind: "help", text: "hi, what can you do?", run: () => turn("hi, what can you do?") },
-    { kind: "find", text: `who are my top candidates for ${someRoleTitle}?`, run: () => turn(`who are my top candidates for ${someRoleTitle}?`) },
-    { kind: "describe", text: `tell me about ${one}`, run: () => turn(`tell me about ${one}`) },
-    { kind: "explain", text: `explain ${one}'s flag and what to probe`, run: () => turn(`explain ${one}'s flag and what to probe`) },
-    ...(two ? [{ kind: "compare", text: `compare ${one} and ${two} — who is stronger?`, run: () => turn(`compare ${one} and ${two} — who is stronger?`) }] : []),
-    { kind: "move_stage", text: `move ${one} to interview`, run: () => turn(`move ${one} to interview`) },
-    { kind: "draft_outreach", text: `draft outreach to ${one}`, run: () => turn(`draft outreach to ${one}`) },
-    // create_intake: route only (running the full turn would create a real JD).
-    { kind: "create_intake", text: "create an intake link for a senior backend engineer, remote, full-time", run: () => routeMessage("create an intake link for a senior backend engineer, remote, full-time", jobs, roster) },
+    { kind: "help", text: "hi, what can you do?", run: () => turn("hi, what can you do?", `PROBE:help:${stamp}`) },
+    { kind: "list_roles", text: "how many roles do I have and which are ready to shortlist?", run: () => turn("how many roles do I have and which are ready to shortlist?", `PROBE:roles:${stamp}`) },
+    { kind: "find", text: `who are my top candidates for ${someRoleTitle}?`, run: () => turn(`who are my top candidates for ${someRoleTitle}?`, `PROBE:find:${stamp}`) },
+    { kind: "describe", text: `tell me about ${one}`, run: () => turn(`tell me about ${one}`, `PROBE:describe:${stamp}`) },
+    { kind: "explain", text: `explain ${one}'s flag and what to probe`, run: () => turn(`explain ${one}'s flag and what to probe`, `PROBE:explain:${stamp}`) },
+    ...(two ? [{ kind: "compare", text: `compare ${one} and ${two} — who is stronger?`, run: () => turn(`compare ${one} and ${two} — who is stronger?`, `PROBE:compare:${stamp}`) }] : []),
+    { kind: "move_stage", text: `move ${one} to interview`, run: () => turn(`move ${one} to interview`, `PROBE:move:${stamp}`) },
+    { kind: "draft_outreach", text: `draft outreach to ${one}`, run: () => turn(`draft outreach to ${one}`, `PROBE:outreach:${stamp}`) },
+    // create_intake: in tools mode this PROPOSES a confirm card (mint is the button
+    // click), so a full turn is safe — it never creates a junk role.
+    { kind: "create_intake", text: "create an intake link for a senior backend engineer, remote, full-time, no work auth needed, 50 applicants", run: () => turn("create an intake link for a senior backend engineer, remote, full-time, no work auth needed, 50 applicants", `PROBE:intake:${stamp}`) },
   ];
 
   for (const k of kinds) {
@@ -137,8 +150,8 @@ async function main(): Promise<void> {
   }
 
   // ---- Report ----
-  origLog("\n================ MEASURED COST PER MESSAGE KIND ================\n");
-  const order = ["help", "find", "describe", "explain", "compare", "move_stage", "draft_outreach", "create_intake"];
+  origLog("\n========== MEASURED COST PER SCENARIO (AGENT_MODE=tools) ==========\n");
+  const order = ["help", "list_roles", "find", "describe", "explain", "compare", "move_stage", "draft_outreach", "create_intake"];
   const seen = new Set(samples.map((s) => s.kind));
   const rows: { kind: string; calls: string; inTok: number; outTok: number; cost: number }[] = [];
   for (const kind of order) {
@@ -180,6 +193,11 @@ async function main(): Promise<void> {
 
   const totalCost = samples.reduce((a, s) => a + s.costUsd, 0);
   origLog(`\nTotal spend for this probe run: $${totalCost.toFixed(6)} across ${samples.length} Gemini calls.`);
+
+  // Clean up the throwaway per-scenario memory docs (keys all carry this stamp).
+  for (const slug of ["help", "roles", "find", "describe", "explain", "compare", "move", "outreach", "intake"]) {
+    await db.collection("agent_threads").doc(`PROBE:${slug}:${stamp}`).delete().catch(() => {});
+  }
   console.log = origLog;
   process.exit(0);
 }

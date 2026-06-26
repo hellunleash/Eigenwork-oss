@@ -8,23 +8,31 @@ import {
 } from "@/lib/agent/data";
 import { geminiText } from "@/lib/agent/gemini";
 import { ROLE_STATUS_LABEL, type RoleStatus } from "@/lib/jd-status";
-import { routeMessage, type RouterResult, type IntakeFields } from "@/lib/agent/router";
+import { routeMessage, type RouterResult } from "@/lib/agent/router";
 import { synthDescribe, synthCompare, synthExplain, candidateFacts } from "@/lib/agent/synthesis";
 import { judgeAnswer } from "@/lib/agent/judge";
 import { scrubJargon } from "@/lib/agent/jargon";
-import { createJd } from "@/lib/jd";
-import { parseJdText } from "@/lib/jd-parse";
-import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
-import {
-  WORK_AUTH_OPTIONS,
-  LOCATION_TYPES,
-  EMPLOYMENT_TYPES,
-  workAuthChoiceToBooleans,
-  type WorkAuthChoice,
-} from "@/lib/jd-options";
 import { STAGES } from "@/lib/stage";
-import { composeOutreach, buildMailto } from "@/lib/outreach";
+import { renderOutreachReply } from "@/lib/outreach";
+import { canUseBotWrites } from "@/lib/entitlements";
 import { logAgentRun } from "@/lib/agent/audit";
+import {
+  assembleDraft,
+  asDraft,
+  mergeEdit,
+  hasRoleContent,
+  askForJd,
+  firstGap,
+  askGap,
+  applyGapAnswer,
+  draftSummary,
+  finalizeIntake,
+  CONFIRM_FOOTER,
+  GAP_ORDER,
+  type IntakeDraft,
+  type IntakeFields,
+  type Gap,
+} from "@/lib/agent/intake";
 import {
   loadConvo,
   saveTurn,
@@ -32,33 +40,29 @@ import {
   savePendingIntake,
   clearPendingIntake,
 } from "@/lib/agent/memory";
+import type { AgentTurnParams, AgentReply } from "@/lib/agent/types";
+import { helpText } from "@/lib/agent/help";
+import { runToolLoop } from "@/lib/agent/tool-loop";
 
 /**
- * The agent turn (ADR-010 Phase 2 + 3). Free-text in → router → execute → (for
- * synthesis) judge + jargon-scrub → reply text. Read tools are deterministic
- * where possible (find/list never hit an LLM, so they can't hallucinate); only
- * the synthesis intents (describe/compare/explain) call the model, and every one
- * is grounded + judged. create_intake (Phase 3) reuses lib/jd.ts createJd.
+ * The agent turn (ADR-010 Phase 2 + 3, ADR-012 dispatch). Free-text in → router →
+ * execute → (for synthesis) judge + jargon-scrub → reply text. Read tools are
+ * deterministic where possible (find/list never hit an LLM, so they can't
+ * hallucinate); only the synthesis intents (describe/compare/explain) call the
+ * model, and every one is grounded + judged. create_intake (Phase 3) reuses
+ * lib/jd.ts createJd via lib/agent/intake.ts.
+ *
+ * ADR-012: `AGENT_MODE` selects the orchestrator — `tools` (the bounded tool-calling
+ * loop, now the DEFAULT) or `router` (this file's intent switch, kept as the instant
+ * rollback). The router stays fully callable; set `AGENT_MODE=router` to fall back,
+ * no redeploy needed.
  */
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
+export type { AgentTurnParams, AgentReply } from "@/lib/agent/types";
 
-export type AgentTurnParams = {
-  orgId: string;
-  userId: string;
-  text: string;
-  teamId?: string;
-  channel?: string;
-  slackUserId?: string;
-  /** Conversation key (DM channel or thread root). When set, the turn loads +
-   *  persists short rolling memory so follow-ups ("both", "the first one") resolve. */
-  convoKey?: string;
-};
-
-/** A reply may be plain text or carry Slack Block Kit (e.g. the move_stage
- *  confirm buttons). The events route posts both. */
-export type AgentReply = { text: string; blocks?: unknown[] };
+const AGENT_MODE = process.env.AGENT_MODE || "tools";
 
 export async function runAgentTurn(params: AgentTurnParams): Promise<AgentReply> {
+  if (AGENT_MODE === "tools") return runToolLoop(params);
   const { orgId, userId, text } = params;
   const [jobs, roster] = await Promise.all([listJobs(orgId), getOrgCandidateRoster(orgId)]);
   const history = params.convoKey ? await loadConvo(params.convoKey) : [];
@@ -211,6 +215,7 @@ function buildStageConfirm(route: RouterResult, roster: CandidateLite[]): AgentR
  * draft_outreach (hard gate): compose a personalized email per candidate from the
  * persisted card and post it with a `mailto:` link. The recruiter sends from their
  * OWN client — the bot never sends. Capped at 5 to keep the message readable.
+ * Paid-plan gated via the SHARED renderer (Free orgs get a teased preview).
  */
 async function buildOutreachDrafts(orgId: string, route: RouterResult, params: AgentTurnParams): Promise<AgentReply> {
   const ids = (route.candidateIds ?? []).slice(0, 5);
@@ -222,17 +227,11 @@ async function buildOutreachDrafts(orgId: string, route: RouterResult, params: A
   );
   if (details.length === 0) return { text: "I couldn't load that candidate's details." };
 
-  const parts = details.map((d) => {
-    const draft = composeOutreach({
-      candidateName: d.name,
-      roleTitle: d.jobTitle,
-      cardTitle: d.card?.title ?? null,
-      cardEdge: d.card?.edge ?? null,
-    });
-    if (!d.email) return `*${d.name}* — no email on file, can't draft outreach.`;
-    const mailto = buildMailto(d.email, draft);
-    return `*${d.name}* — _${draft.subject}_\n${draft.body}\n<${mailto}|📧 Open in your email to send>`;
-  });
+  const paid = await canUseBotWrites(orgId);
+  const text = renderOutreachReply(
+    details.map((d) => ({ name: d.name, email: d.email, roleTitle: d.jobTitle, cardTitle: d.card?.title ?? null, cardEdge: d.card?.edge ?? null })),
+    paid
+  );
 
   await logAgentRun({
     orgId,
@@ -242,10 +241,10 @@ async function buildOutreachDrafts(orgId: string, route: RouterResult, params: A
     teamId: params.teamId,
     channel: params.channel,
     slackUserId: params.slackUserId,
-    detail: { action: "draft_outreach", candidateIds: ids },
+    detail: { action: "draft_outreach", candidateIds: ids, gated: !paid },
   });
 
-  return { text: parts.join("\n\n———\n\n") };
+  return { text };
 }
 
 async function synthesizeAnswer(orgId: string, route: RouterResult, question: string): Promise<string> {
@@ -312,247 +311,10 @@ function findCandidates(route: RouterResult, roster: CandidateLite[]): string {
  * create_intake is a confirm-and-fill flow (it WRITES a JD + consumes a role slot,
  * so it's gated like move_stage). proposeIntake parses the request into a complete
  * draft and parks it; the recruiter fills gaps (esp. work-auth, which the parser
- * never produces) by replying, then confirms. Nothing is minted until confirm.
+ * never produces) by replying, then confirms. Nothing is minted until confirm. The
+ * draft/gap/mint leaves now live in lib/agent/intake.ts — shared verbatim with the
+ * tool-calling path's create_intake (the no-fork contract, ADR-012).
  */
-type IntakeDraft = {
-  title: string;
-  seniority: string;
-  role_category: string;
-  tech_stack: string[];
-  location_type: string;
-  employment_type: string;
-  yoe_required: string;
-  work_auth_us_required: boolean;
-  work_auth_eu_required: boolean;
-  work_auth_provided: boolean;
-  /** True once work-auth has been settled — either the recruiter stated a
-   *  requirement up front, or they picked an option (incl. "none") when asked.
-   *  Distinguishes a deliberate "none" (all booleans false) from "not asked yet". */
-  work_auth_answered: boolean;
-  primary: string[];
-  secondary: string[];
-  tertiary: string[];
-  /** Applicant cap — the intake link closes when it's reached, and shortlisting
-   *  unlocks at 60% of it. null until the recruiter sets it; createJd defaults to
-   *  100 if it's never provided (e.g. they confirm before answering). */
-  submission_cap: number | null;
-};
-
-/** Did the recruiter actually provide a role/JD, or just ask for "a link"? The JD
- *  parser hallucinates a plausible role from empty input (that's how "create an
- *  intake link" once produced a random Software Engineer), so gate on real content
- *  — a title the router extracted, or enough text to be a description — and ask for
- *  the JD rather than fabricate one. */
-function hasRoleContent(intake: IntakeFields, text: string): boolean {
-  if (intake.title && intake.title.trim()) return true;
-  return text.trim().length > 60;
-}
-
-function askForJd(): string {
-  return [
-    "📝 Sure — paste the job description and I'll set up the intake link.",
-    "Or describe the role in a line — *title, seniority, and the key stack* (e.g. _“senior backend engineer, Go + Postgres, remote”_) — and I'll fill in the rest, then ask about anything missing.",
-  ].join("\n");
-}
-
-/** Parse the recruiter's request into a full draft (same parse the web flow uses),
- *  overlaying any fields the router extracted explicitly. */
-async function buildIntakeDraft(intake: IntakeFields, params: AgentTurnParams): Promise<IntakeDraft> {
-  let parsed: Awaited<ReturnType<typeof parseJdText>> | null = null;
-  try {
-    parsed = await parseJdText(params.text);
-  } catch {
-    parsed = null;
-  }
-  // The JD parser never produces work-auth, so it's "answered" up front only if
-  // the recruiter's own message stated one (the router sets any work_auth_* key).
-  const workAuthStated =
-    intake.work_auth_us_required !== undefined ||
-    intake.work_auth_eu_required !== undefined ||
-    intake.work_auth_provided !== undefined;
-  return {
-    title: intake.title || parsed?.title || "New role",
-    seniority: intake.seniority ?? parsed?.seniority ?? "",
-    role_category: parsed?.role_category ?? "",
-    tech_stack: parsed?.tech_stack ?? [],
-    location_type: intake.location_type ?? parsed?.location_type ?? "",
-    employment_type: intake.employment_type ?? parsed?.employment_type ?? "",
-    yoe_required: intake.yoe_required ?? parsed?.yoe_required ?? "",
-    work_auth_us_required: Boolean(intake.work_auth_us_required),
-    work_auth_eu_required: Boolean(intake.work_auth_eu_required),
-    work_auth_provided: Boolean(intake.work_auth_provided),
-    work_auth_answered: workAuthStated,
-    primary: parsed?.primary ?? [],
-    secondary: parsed?.secondary ?? [],
-    tertiary: parsed?.tertiary ?? [],
-    submission_cap: null, // never in a JD — asked as the last gap
-  };
-}
-
-function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
-  if (!p) return null;
-  const s = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
-  const a = (k: string) => (Array.isArray(p[k]) ? (p[k] as string[]) : []);
-  return {
-    title: s("title") || "New role",
-    seniority: s("seniority"),
-    role_category: s("role_category"),
-    tech_stack: a("tech_stack"),
-    location_type: s("location_type"),
-    employment_type: s("employment_type"),
-    yoe_required: s("yoe_required"),
-    work_auth_us_required: Boolean(p.work_auth_us_required),
-    work_auth_eu_required: Boolean(p.work_auth_eu_required),
-    work_auth_provided: Boolean(p.work_auth_provided),
-    work_auth_answered: Boolean(p.work_auth_answered),
-    primary: a("primary"),
-    secondary: a("secondary"),
-    tertiary: a("tertiary"),
-    submission_cap: typeof p.submission_cap === "number" ? (p.submission_cap as number) : null,
-  };
-}
-
-/** Merge the router's edit (only the fields it returned) onto the draft. */
-function mergeEdit(d: IntakeDraft, intake: IntakeFields): IntakeDraft {
-  const workAuthTouched =
-    intake.work_auth_us_required !== undefined ||
-    intake.work_auth_eu_required !== undefined ||
-    intake.work_auth_provided !== undefined;
-  return {
-    ...d,
-    ...(intake.title ? { title: intake.title } : {}),
-    ...(intake.seniority ? { seniority: intake.seniority } : {}),
-    ...(intake.location_type ? { location_type: intake.location_type } : {}),
-    ...(intake.employment_type ? { employment_type: intake.employment_type } : {}),
-    ...(intake.yoe_required ? { yoe_required: intake.yoe_required } : {}),
-    ...(intake.work_auth_us_required !== undefined ? { work_auth_us_required: Boolean(intake.work_auth_us_required) } : {}),
-    ...(intake.work_auth_eu_required !== undefined ? { work_auth_eu_required: Boolean(intake.work_auth_eu_required) } : {}),
-    ...(intake.work_auth_provided !== undefined ? { work_auth_provided: Boolean(intake.work_auth_provided) } : {}),
-    ...(workAuthTouched ? { work_auth_answered: true } : {}),
-  };
-}
-
-/**
- * The fields the recruiter must settle that the JD can't fill in, in the order we
- * ask for any still missing. Work-auth is never in a JD's parsed output, so it's
- * asked unless the recruiter stated it; location/employment are asked only when the
- * parser left them blank; the applicant limit (never in a JD) is asked last, like
- * the web confirm page's Pipeline Settings. Everything else stays autofilled.
- */
-const GAP_ORDER = ["work_auth", "location_type", "employment_type", "applicant_limit"] as const;
-type Gap = (typeof GAP_ORDER)[number];
-
-/** First field still needing input, in GAP_ORDER, or null when the draft is complete. */
-function firstGap(d: IntakeDraft): Gap | null {
-  if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
-    return "work_auth";
-  }
-  if (!d.location_type.trim()) return "location_type";
-  if (!d.employment_type.trim()) return "employment_type";
-  if (d.submission_cap == null) return "applicant_limit";
-  return null;
-}
-
-/** The numbered question for a gap — options come straight from lib/jd-options
- *  (same choices the web confirm page shows), so the recruiter just replies a number. */
-function askGap(g: Gap): string {
-  if (g === "work_auth") {
-    return [
-      "🛂 What *work authorization* does this role require? Reply with the number:",
-      ...WORK_AUTH_OPTIONS.map((o, i) => `${i + 1}. ${o.title}`),
-    ].join("\n");
-  }
-  if (g === "location_type") {
-    return [
-      "📍 What's the *work location*? Reply with the number:",
-      ...LOCATION_TYPES.map((o, i) => `${i + 1}. ${o}`),
-    ].join("\n");
-  }
-  if (g === "employment_type") {
-    return [
-      "💼 What's the *employment type*? Reply with the number:",
-      ...EMPLOYMENT_TYPES.map((o, i) => `${i + 1}. ${o}`),
-    ].join("\n");
-  }
-  return "🔢 Last one — how many applicants should the link accept before it closes? Reply with a number (e.g. *50*). Shortlisting unlocks at 60% of that.";
-}
-
-/** Interpret a reply to a gap question as a pick (a number, or the option label).
- *  Returns the updated draft, or null if it isn't a recognizable answer for that
- *  field (so the caller falls back to the LLM router for edits/confirm/cancel). */
-function applyGapAnswer(d: IntakeDraft, gap: Gap, text: string): IntakeDraft | null {
-  const t = text.trim().toLowerCase();
-  const numMatch = t.match(/^#?\s*(\d+)/);
-  const n = numMatch ? parseInt(numMatch[1], 10) : NaN;
-
-  if (gap === "work_auth") {
-    let choice: WorkAuthChoice | null = null;
-    if (n >= 1 && n <= WORK_AUTH_OPTIONS.length) choice = WORK_AUTH_OPTIONS[n - 1].value;
-    else if (/sponsor|visa/.test(t)) choice = "sponsor";
-    else if (/\bus\b|u\.s\.|united states|america/.test(t)) choice = "us";
-    else if (/\beu\b|europe/.test(t)) choice = "eu";
-    else if (/\b(none|no|not required|open|anyone|any|n\/a)\b/.test(t)) choice = "none";
-    if (!choice) return null;
-    return { ...d, ...workAuthChoiceToBooleans(choice), work_auth_answered: true };
-  }
-
-  if (gap === "location_type") {
-    let v: string | null = null;
-    if (n >= 1 && n <= LOCATION_TYPES.length) v = LOCATION_TYPES[n - 1];
-    else if (/remote/.test(t)) v = "Remote";
-    else if (/hybrid/.test(t)) v = "Hybrid";
-    else if (/on.?site|onsite|in.?office/.test(t)) v = "On-site";
-    if (!v) return null;
-    return { ...d, location_type: v };
-  }
-
-  if (gap === "employment_type") {
-    let v: string | null = null;
-    if (n >= 1 && n <= EMPLOYMENT_TYPES.length) v = EMPLOYMENT_TYPES[n - 1];
-    else if (/full.?time|\bft\b/.test(t)) v = "Full-time";
-    else if (/intern/.test(t)) v = "Intern";
-    else if (/contract/.test(t)) v = "Contract";
-    if (!v) return null;
-    return { ...d, employment_type: v };
-  }
-
-  // applicant_limit — first positive integer anywhere ("50", "cap 50", "limit: 50")
-  const capMatch = t.match(/(\d{1,7})/);
-  const cap = capMatch ? parseInt(capMatch[1], 10) : NaN;
-  if (!Number.isInteger(cap) || cap < 1) return null;
-  return { ...d, submission_cap: cap };
-}
-
-/** The running draft summary — what the JD autofilled, with unfilled picks
- *  flagged. No trailing instruction; the caller appends the next gap question
- *  or the confirm footer. */
-function draftSummary(d: IntakeDraft): string {
-  const skills = [...d.primary, ...d.secondary, ...d.tertiary];
-  const set = (v: string) => (v && v.trim() ? v : "_not set_");
-  let auth: string;
-  if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
-    auth = "_to be set_";
-  } else {
-    const bits: string[] = [];
-    if (d.work_auth_us_required) bits.push("US required");
-    if (d.work_auth_eu_required) bits.push("EU required");
-    if (d.work_auth_provided) bits.push("sponsorship provided");
-    auth = bits.length ? bits.join(", ") : "none required";
-  }
-  return [
-    `📋 Draft intake link — *${d.title}*`,
-    `• Seniority: ${set(d.seniority)}`,
-    `• Location: ${set(d.location_type)}`,
-    `• Type: ${set(d.employment_type)}`,
-    `• Experience: ${set(d.yoe_required)}`,
-    `• Work auth: ${auth}`,
-    `• Applicant limit: ${d.submission_cap != null ? String(d.submission_cap) : "_to be set_"}`,
-    `• Skills: ${skills.length ? skills.join(", ") : "_none detected_"}`,
-  ].join("\n");
-}
-
-const CONFIRM_FOOTER =
-  "Reply to change anything (e.g. *“senior”*, *“5+ years”*), or say *create it* to mint the link.";
 
 /** Persist the draft and respond: ask the next missing pick, or — when nothing's
  *  missing — show the final summary and invite confirmation. `_awaiting` carries
@@ -566,6 +328,35 @@ async function respondWithGapOrConfirm(draft: IntakeDraft, params: AgentTurnPara
   return [draftSummary(draft), "", tail].join("\n");
 }
 
+/** Build a draft from the router's extracted fields + the recruiter's free text,
+ *  mapping IntakeFields onto the shared assembleDraft (same builder the tool path
+ *  uses). work-auth is "answered" up front only if the recruiter's own message
+ *  stated one (the router sets a work_auth_* key). */
+async function buildIntakeDraft(intake: IntakeFields, params: AgentTurnParams): Promise<IntakeDraft> {
+  const workAuthStated =
+    intake.work_auth_us_required !== undefined ||
+    intake.work_auth_eu_required !== undefined ||
+    intake.work_auth_provided !== undefined;
+  return assembleDraft({
+    parseText: params.text,
+    title: intake.title,
+    seniority: intake.seniority,
+    location_type: intake.location_type,
+    employment_type: intake.employment_type,
+    yoe_required: intake.yoe_required,
+    workAuth: {
+      us: Boolean(intake.work_auth_us_required),
+      eu: Boolean(intake.work_auth_eu_required),
+      provided: Boolean(intake.work_auth_provided),
+      answered: workAuthStated,
+    },
+  });
+}
+
+function auditOf(params: AgentTurnParams) {
+  return { teamId: params.teamId, channel: params.channel, slackUserId: params.slackUserId };
+}
+
 async function proposeIntake(
   orgId: string,
   userId: string,
@@ -573,11 +364,11 @@ async function proposeIntake(
   params: AgentTurnParams
 ): Promise<string> {
   // No JD/role given (just "create a link") → ask for it instead of inventing one.
-  if (!hasRoleContent(intake, params.text)) return askForJd();
+  if (!hasRoleContent(intake.title, params.text)) return askForJd();
   const draft = await buildIntakeDraft(intake, params);
   if (!params.convoKey) {
     // No conversation to hold a draft (e.g. a non-Slack caller) — mint directly.
-    return finalizeIntake(orgId, userId, draft, params);
+    return finalizeIntake(orgId, userId, draft, auditOf(params));
   }
   return respondWithGapOrConfirm(draft, params);
 }
@@ -594,65 +385,9 @@ async function confirmIntake(orgId: string, userId: string, params: AgentTurnPar
   if (!params.convoKey) return "I lost track of that draft — say *create an intake link for <role>* to start over.";
   const draft = asDraft(await loadPendingIntake(params.convoKey));
   if (!draft) return "Nothing to confirm — say *create an intake link for <role>* to start one.";
-  const out = await finalizeIntake(orgId, userId, draft, params);
+  const out = await finalizeIntake(orgId, userId, draft, auditOf(params));
   await clearPendingIntake(params.convoKey);
   return out;
-}
-
-/** Mint the JD from a confirmed draft — the same complete payload a web JD gets. */
-async function finalizeIntake(
-  orgId: string,
-  userId: string,
-  d: IntakeDraft,
-  params: AgentTurnParams
-): Promise<string> {
-  const result = await createJd(orgId, userId, {
-    title: d.title,
-    seniority: d.seniority,
-    role_category: d.role_category,
-    tech_stack: d.tech_stack,
-    location_type: d.location_type,
-    employment_type: d.employment_type,
-    yoe_required: d.yoe_required,
-    work_auth_us_required: d.work_auth_us_required,
-    work_auth_eu_required: d.work_auth_eu_required,
-    work_auth_provided: d.work_auth_provided,
-    ...(d.submission_cap != null ? { submissionCap: d.submission_cap } : {}),
-    role_fit: {
-      title: cleanTitle(d.title),
-      primary: d.primary,
-      secondary: d.secondary,
-      tertiary: d.tertiary,
-      one_liner: buildOneLiner(d.title, d.primary, d.secondary, d.tertiary),
-    },
-  });
-  if (!result.ok) {
-    if (result.error === "role_limit_reached") {
-      return `You've reached your plan's active-role limit (${result.activeRoles}/${result.roleLimit}). Close a role or upgrade to open another intake link.`;
-    }
-    return "I couldn't create that role just now — please try again.";
-  }
-
-  await logAgentRun({
-    orgId,
-    userId,
-    surface: "slack",
-    kind: "action",
-    teamId: params.teamId,
-    channel: params.channel,
-    slackUserId: params.slackUserId,
-    detail: { action: "create_intake", jobId: result.jobId, title: d.title },
-  });
-
-  const link = `${APP_URL}/candidate?jobId=${result.jobId}`;
-  return [
-    `✅ Done — intake link for *${d.title}*:`,
-    link,
-    "",
-    "Paste-ready for your network:",
-    `> We're hiring a ${d.title}! Apply here and you'll hear back fast 👇`,
-    `> ${link}`,
-  ].join("\n");
 }
 
 /**
@@ -703,14 +438,3 @@ Reply in 1–4 short lines, Slack-friendly (*bold* ok), no preamble. If they jus
   return [`You have *${roles.length}* role${roles.length === 1 ? "" : "s"} — ${summary}:`, ...lines].join("\n");
 }
 
-function helpText(): string {
-  return [
-    "👋 I'm EigenBot — run your hiring end to end right from Slack: open a role, collect and screen applicants, shortlist, advance candidates, and reach out. No dashboard needed. Here's the flow:",
-    "1️⃣  *Create an intake link for your role* — paste a JD or describe it; share the link to collect applicants",
-    "2️⃣  *Who are my top candidates for <role>?* — see the ranked shortlist once they're in",
-    "3️⃣  *Tell me about <candidate>*  ·  *Why is <A> stronger than <B>?* — dig into the shortlist",
-    "4️⃣  *Move <candidate> to interview*  ·  *Reject <candidate>* — advance the pipeline",
-    "5️⃣  *Draft outreach to <candidate>* — get a ready-to-send email",
-    "_Anytime: *which roles are ready to shortlist?*  ·  *how many roles do I have?*_",
-  ].join("\n");
-}
