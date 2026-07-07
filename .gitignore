@@ -61,3 +61,9 @@ coverage/
 
 # Private — personal CV kept locally for reference, not product content
 docs/Personal_cv_for interview prpose/
+
+# Sales — lead lists + tracker hold contact PII (emails, names). Keep local, never commit.
+sales/
+
+# Job hunt — personal application materials + target lists. Keep local, never commit.
+jobhunt/

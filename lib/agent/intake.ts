@@ -1,5 +1,5 @@
 import { createJd } from "@/lib/jd";
-import { parseJdText } from "@/lib/jd-parse";
+import { parseJdText, coerceMlMode, type MlMode } from "@/lib/jd-parse";
 import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
 import {
   WORK_AUTH_OPTIONS,
@@ -53,10 +53,19 @@ export type IntakeDraft = {
   primary: string[];
   secondary: string[];
   tertiary: string[];
+  /** ADR-013: role-function facet emitted by the JD parser (builds vs integrates
+   *  vs both vs n/a). Threaded through to createJd so a bot-minted JD carries the
+   *  same ml_mode a web-minted one does. */
+  ml_mode: MlMode;
   /** Applicant cap — the intake link closes when it's reached, and shortlisting
    *  unlocks at 60% of it. null until the recruiter sets it; createJd defaults to
    *  100 if it's never provided (e.g. they confirm before answering). */
   submission_cap: number | null;
+  /** Free-text extras the recruiter asked to mention ONLY in the shareable
+   *  "paste-ready" message — e.g. office city, compensation, perks. This is NOT a
+   *  JD field: finalizeIntake deliberately omits it from createJd, so it never lands
+   *  on the role and is never used for matching or filtering. Empty when unset. */
+  share_note: string;
 };
 
 /** Normalized builder inputs — the union both callers map onto (the router's
@@ -71,6 +80,8 @@ export type DraftInput = {
   yoe_required?: string;
   workAuth?: { us: boolean; eu: boolean; provided: boolean; answered: boolean };
   submission_cap?: number | null;
+  /** Free text to mention only in the shareable message (city, comp, perks). */
+  share_note?: string;
 };
 
 /** Parse the recruiter's request into a full draft (same parse the web flow uses),
@@ -100,7 +111,9 @@ export async function assembleDraft(input: DraftInput): Promise<IntakeDraft> {
     primary: parsed?.primary ?? [],
     secondary: parsed?.secondary ?? [],
     tertiary: parsed?.tertiary ?? [],
+    ml_mode: parsed?.ml_mode ?? "n/a",
     submission_cap: input.submission_cap ?? null,
+    share_note: input.share_note?.trim() || "",
   };
 }
 
@@ -125,7 +138,9 @@ export function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
     primary: a("primary"),
     secondary: a("secondary"),
     tertiary: a("tertiary"),
+    ml_mode: coerceMlMode(p.ml_mode),
     submission_cap: typeof p.submission_cap === "number" ? (p.submission_cap as number) : null,
+    share_note: s("share_note"),
   };
 }
 
@@ -273,7 +288,7 @@ export function draftSummary(d: IntakeDraft): string {
     if (d.work_auth_provided) bits.push("sponsorship provided");
     auth = bits.length ? bits.join(", ") : "none required";
   }
-  return [
+  const lines = [
     `📋 Draft intake link — *${d.title}*`,
     `• Seniority: ${set(d.seniority)}`,
     `• Location: ${set(d.location_type)}`,
@@ -282,6 +297,27 @@ export function draftSummary(d: IntakeDraft): string {
     `• Work auth: ${auth}`,
     `• Applicant limit: ${d.submission_cap != null ? String(d.submission_cap) : "_to be set_"}`,
     `• Skills: ${skills.length ? skills.join(", ") : "_none detected_"}`,
+  ];
+  if (d.share_note.trim()) lines.push(`• Also in the share message: ${d.share_note.trim()}`);
+  return lines.join("\n");
+}
+
+/** The public intake/application URL for a minted role. */
+export function intakeLink(jobId: string): string {
+  return `${APP_URL}/candidate?jobId=${jobId}`;
+}
+
+/** The recruiter-facing "paste-ready" blurb for a role's intake link. `shareNote`
+ *  is optional free text the recruiter asked to include (office city, compensation,
+ *  perks); it appears ONLY here, never on the JD. Shared by finalizeIntake (create
+ *  time) and the share_message tool (an already-minted link) — one builder, no fork. */
+export function buildShareMessage(title: string, link: string, shareNote?: string): string {
+  const note = (shareNote ?? "").trim();
+  return [
+    "Paste-ready for your network:",
+    `> We're hiring a ${title}! Apply here and you'll hear back fast 👇`,
+    ...(note ? [`> ${note}`] : []),
+    `> ${link}`,
   ].join("\n");
 }
 
@@ -316,6 +352,7 @@ export async function finalizeIntake(
       tertiary: d.tertiary,
       one_liner: buildOneLiner(d.title, d.primary, d.secondary, d.tertiary),
     },
+    ml_mode: d.ml_mode,
   });
   if (!result.ok) {
     if (result.error === "role_limit_reached") {
@@ -335,13 +372,11 @@ export async function finalizeIntake(
     detail: { action: "create_intake", jobId: result.jobId, title: d.title },
   });
 
-  const link = `${APP_URL}/candidate?jobId=${result.jobId}`;
+  const link = intakeLink(result.jobId);
   return [
     `✅ Done — intake link for *${d.title}*:`,
     link,
     "",
-    "Paste-ready for your network:",
-    `> We're hiring a ${d.title}! Apply here and you'll hear back fast 👇`,
-    `> ${link}`,
+    buildShareMessage(d.title, link, d.share_note),
   ].join("\n");
 }

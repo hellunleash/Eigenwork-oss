@@ -23,6 +23,8 @@ import {
   askGap,
   hasRoleContent,
   askForJd,
+  buildShareMessage,
+  intakeLink,
   type IntakeDraft,
 } from "@/lib/agent/intake";
 import { workAuthChoiceToBooleans, type WorkAuthChoice } from "@/lib/jd-options";
@@ -44,7 +46,7 @@ import type { AgentReply, AuditMeta } from "@/lib/agent/types";
  * validated against the caller's own roster) — T3/T4.
  */
 
-export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate", "export_candidates", "send_resume"] as const;
+export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate", "export_candidates", "send_resume", "share_message"] as const;
 export const WRITE_TOOLS = ["run_match", "create_intake", "move_stage", "draft_outreach"] as const;
 export type ToolName = (typeof READ_TOOLS)[number] | (typeof WRITE_TOOLS)[number];
 
@@ -165,7 +167,28 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
           description: "Work authorization: none required / must have US / must have EU / we sponsor.",
         },
         applicant_limit: { type: SchemaType.NUMBER, description: "How many applicants the link accepts before it closes. Shortlisting unlocks at 60%." },
+        share_note: {
+          type: SchemaType.STRING,
+          description:
+            "OPTIONAL free-text extras to include ONLY in the shareable 'paste-ready' message — e.g. office city (Hyderabad), compensation (50–70k USD), or perks. NOT stored on the role and NEVER used for matching or filtering. Compose it compactly (e.g. 'On-site · Hyderabad · 50–70k USD'); include whatever the recruiter asks the post to mention. Never refuse these — this is where they go.",
+        },
       },
+    },
+  },
+  {
+    name: "share_message",
+    description:
+      "Produce the 'paste-ready' shareable blurb for an EXISTING role's intake link (the message a recruiter posts to their network). Use this — NOT create_intake — when the recruiter already has the role and just wants the shareable message, the link to share, or wants to change what the message mentions. Never creates a new role or link. Pass share_note for free-text extras (office city, compensation, perks) that should appear only in the message.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        jobId: { type: SchemaType.STRING, description: "Role id from list_roles." },
+        share_note: {
+          type: SchemaType.STRING,
+          description: "Optional free-text extras to mention in the message only — e.g. office city, compensation, perks. Compose compactly (e.g. 'On-site · Hyderabad · 50–70k USD').",
+        },
+      },
+      required: ["jobId"],
     },
   },
   {
@@ -213,6 +236,8 @@ export async function dispatchRead(name: string, args: Record<string, unknown>, 
       return readExportCandidates(args, ctx);
     case "send_resume":
       return readSendResume(args, ctx);
+    case "share_message":
+      return readShareMessage(args, ctx);
     default:
       return { error: `Unknown read tool: ${name}` };
   }
@@ -297,6 +322,22 @@ async function readExportCandidates(args: Record<string, unknown>, ctx: ToolCtx)
     attached: false,
     csv,
     instruction: "Couldn't attach a file — post the csv value verbatim in a triple-backtick code block, and note they can reconnect Slack for a downloadable .csv.",
+  };
+}
+
+/** Regenerate the paste-ready shareable blurb for an EXISTING role's link, with any
+ *  free-text extras the recruiter wants mentioned — no mutation, no new link. Reuses
+ *  the SAME builder as finalizeIntake (no fork); jobId is validated against the
+ *  caller's own org-scoped roles, so it can't address another org's role. */
+function readShareMessage(args: Record<string, unknown>, ctx: ToolCtx): ReadResult {
+  const jobId = typeof args.jobId === "string" ? args.jobId : "";
+  const job = ctx.jobs.find((j) => j.id === jobId);
+  if (!job) return { error: "I don't see that role. Ask me to list your roles first." };
+  const note = typeof args.share_note === "string" ? args.share_note : "";
+  const message = buildShareMessage(job.title || "New role", intakeLink(jobId), note);
+  return {
+    message,
+    instruction: "Post the message value to the recruiter verbatim as the paste-ready blurb — keep the wording and the link as-is.",
   };
 }
 
@@ -431,6 +472,7 @@ async function proposeCreateIntake(args: Record<string, unknown>, ctx: ToolCtx):
     yoe_required: typeof args.yoe_required === "string" ? args.yoe_required : undefined,
     workAuth,
     submission_cap: cap,
+    share_note: typeof args.share_note === "string" ? args.share_note : undefined,
   });
 
   // Still missing a required pick → tell the model exactly what to ask (with the
@@ -458,6 +500,9 @@ function compactDraft(d: IntakeDraft): IntakeDraft {
     primary: cap(d.primary, 8),
     secondary: cap(d.secondary, 12),
     tertiary: cap(d.tertiary, 12),
+    // Bound the free text too so a long note can't push the button value past Slack's
+    // ~2000-char limit (which would reject the confirm card).
+    share_note: d.share_note.slice(0, 300),
   };
 }
 

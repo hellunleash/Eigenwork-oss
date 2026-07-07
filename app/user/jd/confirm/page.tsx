@@ -27,6 +27,9 @@ type JDForm = {
   work_auth_eu_required: boolean;
   work_auth_provided: boolean;
   submissionCap?: number | "" | undefined;
+  // ADR-013: role-function facet from the JD parser; passed through to save via
+  // the `...form` spread. Not an editable UI field.
+  ml_mode?: string;
 };
 
 function parseCommaSeparated(value: string): string[] {
@@ -141,6 +144,7 @@ function JDConfirmContent() {
           work_auth_eu_required: Boolean(parsed.work_auth_eu_required),
           work_auth_provided: Boolean(parsed.work_auth_provided),
           submissionCap: parsed.submissionCap,
+          ml_mode: typeof parsed.ml_mode === "string" ? parsed.ml_mode : "n/a",
         });
         if (Array.isArray(parsed.primary)) setPrimaryRaw(parsed.primary.join(", "));
         if (Array.isArray(parsed.secondary)) setSecondaryRaw(parsed.secondary.join(", "));

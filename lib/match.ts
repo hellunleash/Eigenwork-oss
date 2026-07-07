@@ -29,6 +29,7 @@ import {
 } from "@/lib/rolefit-cache";
 import { log, timeMs, type LogContext } from "@/lib/server-logger";
 import { runWithConcurrency } from "@/lib/concurrency";
+import { coerceMlMode, type MlMode } from "@/lib/jd-parse";
 
 // --- Role-fit batching configuration ---------------------------------------
 // CHUNK_SIZE keeps Gemini output well under the 8192-token default cap
@@ -418,6 +419,23 @@ export type MatchResult = {
   error?: string;
 };
 
+/** ADR-013: a candidate's ml_mode facet, read off the persisted operating_profile
+ *  the evaluator emitted. Absent/invalid (legacy docs, until re-evaluated) → "n/a",
+ *  which is never demoted. */
+function candidateMlMode(c: CandidateDoc): MlMode {
+  return coerceMlMode((c.profile as { ml_mode?: unknown } | undefined)?.ml_mode);
+}
+
+/** ADR-013: tolerant AI/ML role_category check — the second, independent gate on
+ *  the ml_mode demotion so it can never fire outside AI/ML roles. */
+function isAiMlCategory(roleCategory: string): boolean {
+  const c = roleCategory.toLowerCase();
+  return (
+    /\b(ai|ml)\b/.test(c) ||
+    /machine learning|deep learning|artificial intelligence|data scien|computer vision|\bnlp\b|\bmlops\b|generative ai|genai/.test(c)
+  );
+}
+
 /**
  * Run a role-fit match for one JD. `isOwner` is injected by the caller so each
  * front door keeps its exact ownership rule (route: orgId, worker: userId).
@@ -493,6 +511,14 @@ export async function runMatch(
   const jdRoleFitOneLiner = getJDRoleFitOneLiner(jd);
   const jobAuth = (jd.work_auth_requirement as Record<string, boolean> | undefined) ?? {};
 
+  // ADR-013: does this JD require model-BUILDING capability? Reads the ml_mode
+  // facet the JD parser emitted. Double-gated: true only for an AI/ML-category
+  // role whose facet is build-shaped ("builds_models" or "both").
+  const jdMode = coerceMlMode(jd.ml_mode);
+  const jdWantsBuilding =
+    isAiMlCategory(String(jd.role_category ?? "")) &&
+    (jdMode === "builds_models" || jdMode === "both");
+
   // OPTIMIZATION: select only the fields the filter/sort/match pipeline needs.
   // Each candidate doc can be 20-100KB (the `breakdown` field is the big chunk);
   // selecting 3 nested fields drops per-doc transfer to ~500 bytes. The top-20
@@ -500,7 +526,7 @@ export async function runMatch(
   const candidatesSnap = await db
     .collection("candidates")
     .where("matchData.jobId", "==", jdId)
-    .select("score", "profile.role_fit", "matchData.authRegions")
+    .select("score", "profile.role_fit", "profile.ml_mode", "matchData.authRegions")
     .get();
   let list: CandidateDoc[] = [];
   candidatesSnap.docs.forEach((d) => {
@@ -528,7 +554,22 @@ export async function runMatch(
     workAuthMatch(jobAuth, (c.matchData as Record<string, unknown>)?.authRegions as string[] | undefined)
   );
 
-  list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  // ADR-013: precompute each surviving candidate's ml_mode facet (persisted field,
+  // else derived from role_fit tokens). When the JD needs model building, an
+  // integrate-only candidate is DEMOTED below every other candidate — it sinks in
+  // the shortlist (and falls off the top-20 if there are enough real fits) but is
+  // never dropped. When jdWantsBuilding is false this is a pure score sort, exactly
+  // as before — the facet touches nothing outside build-shaped AI/ML roles.
+  const mlModeById = new Map<string, MlMode>(list.map((c) => [c.id, candidateMlMode(c)]));
+  const isDemoted = (c: CandidateDoc): boolean =>
+    jdWantsBuilding && mlModeById.get(c.id) === "integrates_models";
+  const mlDemotedCount = jdWantsBuilding ? list.filter(isDemoted).length : 0;
+
+  list.sort((a, b) => {
+    const demoteDelta = Number(isDemoted(a)) - Number(isDemoted(b));
+    if (demoteDelta !== 0) return demoteDelta; // non-demoted first
+    return (b.score ?? 0) - (a.score ?? 0);
+  });
   const top = list.slice(0, TOP_MATCH_COUNT);
 
   // Re-fetch FULL docs for the top 20 only. The minimal scan above didn't include
@@ -633,6 +674,8 @@ export async function runMatch(
     matchOrAdjacent: roleFitResults.filter((r) => r === "MATCH" || r === "ADJACENT").length,
     afterFilters: list.length,
     top20Count: top20.length,
+    jdMlMode: jdMode,
+    mlDemoted: mlDemotedCount,
     latencyMs: tRun(),
   });
 

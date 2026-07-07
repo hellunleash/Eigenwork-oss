@@ -12,7 +12,7 @@ Supervision Load
 Role Fit
 - Extract:
     • title → concise industry-standard title(must not contain the word "intern" as its a work type not title.)
-    • primary → single core language/stack(max 2 items) (e.g., Python, Node, Java, C#, Go)
+    • primary → single core language/stack(max 3 items) (e.g., Python, Node, Java, C#, Go)
     • secondary → key supporting frameworks/tools (array)
     • tertiary → optional tools (array)
 - Output a one_liner in this format ONLY:
@@ -51,13 +51,24 @@ triggered[].reason — every recruiter-facing string):
 Role Fit
 - Extract:
     • title → concise industry-standard title(must not contain the word "intern" as its a work type not title.)
-    • primary → single core language/stack(max 2 items) (e.g., Python, Node, Java, C#, Go)
+    • primary → single core language/stack(max 3 items) (e.g., Python, Node, Java, C#, Go)
     • secondary → key supporting frameworks/tools (array)
     • tertiary → optional tools (array)
 - Output a one_liner in this format ONLY:
     "<title> (<primary> | <secondary comma-separated> | <tertiary comma-separated>)"
 - Do NOT include the words "primary", "secondary", "tertiary" in the one_liner.
 - Do NOT hallucinate tools not present in the resume.
+
+ML Mode (function within AI/ML — judge from evidence, NOT the title)
+Emit exactly one of:
+- "builds_models": trains / fine-tunes / architects models (e.g. PyTorch,
+  TensorFlow, training pipelines, VAEs/GANs, classical ML, model architecture).
+- "integrates_models": consumes hosted model APIs or orchestrates LLMs WITHOUT
+  training them (e.g. OpenAI/Anthropic/Gemini APIs, LangChain, RAG, prompting,
+  agents, vector DBs).
+- "both": clear evidence of BOTH training and integration.
+- "n/a": no meaningful AI/ML work.
+Do NOT infer from buzzwords in the title; require concrete evidence in the resume.
 
 Title (recruiter card headline, <=60 chars)
 Pick ONE of the three patterns below in priority order:

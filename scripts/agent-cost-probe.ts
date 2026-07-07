@@ -45,7 +45,7 @@ async function loadEnv(): Promise<void> {
   }
 }
 
-type Sample = { kind: string; label: string; inputTokens: number; outputTokens: number; costUsd: number };
+type Sample = { kind: string; label: string; inputTokens: number; cachedTokens: number; outputTokens: number; thinkingTokens: number; costUsd: number };
 
 async function main(): Promise<void> {
   await loadEnv();
@@ -60,8 +60,8 @@ async function main(): Promise<void> {
     const s = typeof args[0] === "string" ? args[0] : "";
     if (s.includes('"agent.gemini_usage"')) {
       try {
-        const o = JSON.parse(s) as { label: string; inputTokens: number; outputTokens: number; costUsd: number };
-        samples.push({ kind: currentKind, label: o.label, inputTokens: o.inputTokens, outputTokens: o.outputTokens, costUsd: o.costUsd });
+        const o = JSON.parse(s) as { label: string; inputTokens: number; cachedTokens?: number; outputTokens: number; thinkingTokens?: number; costUsd: number };
+        samples.push({ kind: currentKind, label: o.label, inputTokens: o.inputTokens, cachedTokens: o.cachedTokens ?? 0, outputTokens: o.outputTokens, thinkingTokens: o.thinkingTokens ?? 0, costUsd: o.costUsd });
       } catch {
         /* not the json we want */
       }
@@ -153,32 +153,40 @@ async function main(): Promise<void> {
   origLog("\n========== MEASURED COST PER SCENARIO (AGENT_MODE=tools) ==========\n");
   const order = ["help", "list_roles", "find", "describe", "explain", "compare", "move_stage", "draft_outreach", "create_intake"];
   const seen = new Set(samples.map((s) => s.kind));
-  const rows: { kind: string; calls: string; inTok: number; outTok: number; cost: number }[] = [];
+  const rows: { kind: string; calls: string; inTok: number; cacheTok: number; outTok: number; thinkTok: number; cost: number }[] = [];
   for (const kind of order) {
     if (!seen.has(kind)) continue;
     const ks = samples.filter((s) => s.kind === kind);
     const inTok = ks.reduce((a, s) => a + s.inputTokens, 0);
+    const cacheTok = ks.reduce((a, s) => a + s.cachedTokens, 0);
     const outTok = ks.reduce((a, s) => a + s.outputTokens, 0);
+    const thinkTok = ks.reduce((a, s) => a + s.thinkingTokens, 0);
     const cost = ks.reduce((a, s) => a + s.costUsd, 0);
     const calls = ks.map((s) => s.label.replace(/^synthesis_/, "syn:")).join(" + ");
-    rows.push({ kind, calls, inTok, outTok, cost });
+    rows.push({ kind, calls, inTok, cacheTok, outTok, thinkTok, cost });
   }
 
   const pad = (s: string, n: number) => s + " ".repeat(Math.max(0, n - s.length));
-  origLog(pad("KIND", 16) + pad("LLM CALLS", 34) + pad("IN", 8) + pad("OUT", 8) + pad("$ / MSG", 12) + "MSGS / $1");
-  origLog("-".repeat(94));
+  // THINK = thinking tokens (billed at the OUTPUT rate) — watch this fall when
+  // AGENT_THINKING_BUDGET is bounded vs the old unbounded/dynamic thinking.
+  // CACHE = the slice of IN served from Gemini's implicit prompt cache (25% rate) —
+  // 0 here on a repeated identical prefix means implicit caching isn't crediting it.
+  origLog(pad("KIND", 16) + pad("LLM CALLS", 34) + pad("IN", 8) + pad("CACHE", 8) + pad("OUT", 8) + pad("THINK", 8) + pad("$ / MSG", 12) + "MSGS / $1");
+  origLog("-".repeat(110));
   for (const r of rows) {
     const perDollar = r.cost > 0 ? Math.floor(1 / r.cost).toLocaleString() : "∞";
     origLog(
       pad(r.kind, 16) +
         pad(r.calls, 34) +
         pad(String(r.inTok), 8) +
+        pad(String(r.cacheTok), 8) +
         pad(String(r.outTok), 8) +
+        pad(String(r.thinkTok), 8) +
         pad("$" + r.cost.toFixed(6), 12) +
         perDollar
     );
   }
-  origLog("-".repeat(94));
+  origLog("-".repeat(110));
 
   // Per-label averages (the reusable cost primitives).
   origLog("\nPer-call averages by label:");
@@ -186,9 +194,11 @@ async function main(): Promise<void> {
   for (const label of labels) {
     const ls = samples.filter((s) => s.label === label);
     const avgIn = Math.round(ls.reduce((a, s) => a + s.inputTokens, 0) / ls.length);
+    const avgCache = Math.round(ls.reduce((a, s) => a + s.cachedTokens, 0) / ls.length);
     const avgOut = Math.round(ls.reduce((a, s) => a + s.outputTokens, 0) / ls.length);
+    const avgThink = Math.round(ls.reduce((a, s) => a + s.thinkingTokens, 0) / ls.length);
     const avgCost = ls.reduce((a, s) => a + s.costUsd, 0) / ls.length;
-    origLog(`  ${pad(label, 20)} n=${ls.length}  in≈${avgIn}  out≈${avgOut}  $${avgCost.toFixed(6)}/call`);
+    origLog(`  ${pad(label, 20)} n=${ls.length}  in≈${avgIn}  cache≈${avgCache}  out≈${avgOut}  think≈${avgThink}  $${avgCost.toFixed(6)}/call`);
   }
 
   const totalCost = samples.reduce((a, s) => a + s.costUsd, 0);

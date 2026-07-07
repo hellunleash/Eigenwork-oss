@@ -80,6 +80,8 @@ export const PROFILE_SCHEMA_FRAGMENT_V2 = `"operating_profile": {
 
         "risk_flags": string[],
 
+        "ml_mode": "builds_models | integrates_models | both | n/a",
+
         "title": "recruiter-facing headline(<=60 chars, follows the locked title pattern, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)",
         "edge": "one sharp sentence about the strongest evidence(<=25 words, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block)",
         "flag": "null OR recruiter-language phrase about a REAL fraud-shaped risk(<=20 words, NEVER use ESQ/PDQ/NR/OM/OD/PC/rubric/block). null on clean candidates."

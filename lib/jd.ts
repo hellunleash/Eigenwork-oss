@@ -10,6 +10,12 @@
 import { getAdminDb, FieldValue } from "@/lib/firebase-admin";
 import { canActivateRole } from "@/lib/entitlements";
 
+// ADR-013: the ml_mode facet is emitted by the JD parser (lib/jd-parse.ts) and
+// threaded through here. This is the whitelist for persisting a client/model-
+// supplied value — an invalid or absent value is OMITTED (not defaulted), so an
+// edit that doesn't carry ml_mode preserves whatever the create-time parse set.
+const ML_MODES = new Set(["builds_models", "integrates_models", "both", "n/a"]);
+
 export type JdInput = {
   title?: unknown;
   seniority?: unknown;
@@ -23,6 +29,7 @@ export type JdInput = {
   work_auth_provided?: unknown;
   submissionCap?: unknown;
   role_fit?: unknown;
+  ml_mode?: unknown;
 };
 
 /**
@@ -47,6 +54,12 @@ function buildJdPayload(input: JdInput, orgId: string, userId: string): Record<s
         }
       : null;
 
+  // ADR-013: persist the model-emitted ml_mode facet when a valid one is present.
+  // Omitted (not defaulted) when absent so an edit that doesn't carry it preserves
+  // the create-time value.
+  const mlMode =
+    typeof input.ml_mode === "string" && ML_MODES.has(input.ml_mode) ? input.ml_mode : null;
+
   return {
     title: input.title ?? "",
     seniority: input.seniority ?? "",
@@ -62,6 +75,7 @@ function buildJdPayload(input: JdInput, orgId: string, userId: string): Record<s
     },
     submissionCap: cap,
     ...(roleFitDoc ? { role_fit: roleFitDoc } : {}),
+    ...(mlMode ? { ml_mode: mlMode } : {}),
     userId,
     orgId,
   };

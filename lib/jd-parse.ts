@@ -28,10 +28,21 @@ Output ONLY a valid JSON object with exactly these fields (no markdown, no comme
   "tertiary": ["string"] — optional supporting tools . 2–5 items.",
   "location_type": "string — e.g. Remote, Onsite, Hybrid",
   "yoe_required": "string — years of experience required",
-  "employment_type": "string — e.g. Full-time, Contract, Intern"
+  "employment_type": "string — e.g. Full-time, Contract, Intern",
+  "ml_mode": "one of builds_models | integrates_models | both | n/a — what the ROLE requires. builds_models = must train/fine-tune/architect models (PyTorch, TensorFlow, training, VAEs/GANs, classical ML). integrates_models = build LLM apps / integrate hosted model APIs WITHOUT training (OpenAI/Anthropic/Gemini, LangChain, RAG, prompting, agents). both = requires both. n/a = not an AI/ML role. Judge from the JD's actual requirements, not buzzwords."
 }
 Classify technologies from the JD into primary (core),secondary (important), and tertiary (supporting). Each array must contain only non-empty strings.
 `;
+
+export type MlMode = "builds_models" | "integrates_models" | "both" | "n/a";
+
+const ML_MODES = new Set<string>(["builds_models", "integrates_models", "both", "n/a"]);
+
+/** Coerce an untrusted value into a MlMode, defaulting to "n/a". Shared read-side
+ *  guard used wherever a model- or client-supplied ml_mode is trusted. */
+export function coerceMlMode(x: unknown): MlMode {
+  return typeof x === "string" && ML_MODES.has(x) ? (x as MlMode) : "n/a";
+}
 
 export type ParsedJD = {
   title: string;
@@ -44,6 +55,7 @@ export type ParsedJD = {
   location_type: string;
   yoe_required: string;
   employment_type: string;
+  ml_mode: MlMode;
 };
 
 function toStrArray(val: unknown): string[] {
@@ -75,6 +87,7 @@ async function runParseModel(text: string, modelName: string): Promise<ParsedJD>
     location_type: String(parsed.location_type ?? ""),
     yoe_required: String(parsed.yoe_required ?? ""),
     employment_type: String(parsed.employment_type ?? ""),
+    ml_mode: coerceMlMode(parsed.ml_mode),
   };
 }
 
