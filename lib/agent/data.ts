@@ -49,6 +49,37 @@ export async function listJobs(orgId: string): Promise<JobLite[]> {
   });
 }
 
+export type JobShareDetail = {
+  title: string;
+  seniority: string;
+  location_type: string;
+  employment_type: string;
+  yoe_required: string;
+  work_auth_us_required: boolean;
+  work_auth_eu_required: boolean;
+  work_auth_provided: boolean;
+};
+
+/** The role's shareable-post detail fields, org-scoped (returns null for a role the
+ *  caller's org doesn't own — enumeration-resistant). Read by the share_message tool
+ *  so an EXISTING link's blurb carries the same full detail set a fresh mint does. */
+export async function getJobShareDetail(orgId: string, jobId: string): Promise<JobShareDetail | null> {
+  const doc = await getAdminDb().collection("jds").doc(jobId).get();
+  const data = doc.data();
+  if (!data || data.orgId !== orgId) return null;
+  const s = (k: string) => (typeof data[k] === "string" ? (data[k] as string) : "");
+  return {
+    title: s("title"),
+    seniority: s("seniority"),
+    location_type: s("location_type"),
+    employment_type: s("employment_type"),
+    yoe_required: s("yoe_required"),
+    work_auth_us_required: Boolean(data.work_auth_us_required),
+    work_auth_eu_required: Boolean(data.work_auth_eu_required),
+    work_auth_provided: Boolean(data.work_auth_provided),
+  };
+}
+
 /**
  * The org's candidate roster, drawn from each role's persisted shortlist
  * (jds.matchResult.top20). This is the grounding set the router resolves names

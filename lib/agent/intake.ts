@@ -307,16 +307,49 @@ export function intakeLink(jobId: string): string {
   return `${APP_URL}/candidate?jobId=${jobId}`;
 }
 
-/** The recruiter-facing "paste-ready" blurb for a role's intake link. `shareNote`
- *  is optional free text the recruiter asked to include (office city, compensation,
- *  perks); it appears ONLY here, never on the JD. Shared by finalizeIntake (create
- *  time) and the share_message tool (an already-minted link) — one builder, no fork. */
-export function buildShareMessage(title: string, link: string, shareNote?: string): string {
-  const note = (shareNote ?? "").trim();
+/** The detail bundle the shareable post is composed from. An IntakeDraft (create
+ *  time) and a loaded JD (existing link) both satisfy this shape. */
+export type ShareDetails = {
+  title: string;
+  seniority?: string;
+  location_type?: string;
+  employment_type?: string;
+  yoe_required?: string;
+  work_auth_us_required?: boolean;
+  work_auth_eu_required?: boolean;
+  work_auth_provided?: boolean;
+  /** Free-text extras (office city, compensation, perks) — appended after the
+   *  structured facts, never written to the JD. */
+  share_note?: string;
+};
+
+/** Compact "· "-joined line of the role's public-facing facts followed by the
+ *  recruiter's free-text extras. Applicant limit + skills are intentionally left out
+ *  — they aren't for a public post. */
+function shareDetailLine(d: ShareDetails): string {
+  const bits: string[] = [];
+  if (d.seniority?.trim()) bits.push(d.seniority.trim());
+  if (d.location_type?.trim()) bits.push(d.location_type.trim());
+  if (d.employment_type?.trim()) bits.push(d.employment_type.trim());
+  if (d.yoe_required?.trim()) bits.push(d.yoe_required.trim());
+  if (d.work_auth_us_required) bits.push("US work auth required");
+  else if (d.work_auth_eu_required) bits.push("EU work auth required");
+  else if (d.work_auth_provided) bits.push("Visa sponsorship available");
+  const note = (d.share_note ?? "").trim();
+  if (note) bits.push(note);
+  return bits.join(" · ");
+}
+
+/** The recruiter-facing "paste-ready" blurb for a role's intake link — title, the
+ *  FULL compact detail line, then the link. `share_note` carries free-text extras
+ *  (city, comp, perks) that never touch the JD. One builder, shared by finalizeIntake
+ *  (create time) and the share_message tool (an existing link) — no fork. */
+export function buildShareMessage(link: string, d: ShareDetails): string {
+  const detail = shareDetailLine(d);
   return [
     "Paste-ready for your network:",
-    `> We're hiring a ${title}! Apply here and you'll hear back fast 👇`,
-    ...(note ? [`> ${note}`] : []),
+    `> We're hiring a ${d.title}! Apply here and you'll hear back fast 👇`,
+    ...(detail ? [`> ${detail}`] : []),
     `> ${link}`,
   ].join("\n");
 }
@@ -377,6 +410,6 @@ export async function finalizeIntake(
     `✅ Done — intake link for *${d.title}*:`,
     link,
     "",
-    buildShareMessage(d.title, link, d.share_note),
+    buildShareMessage(link, d),
   ].join("\n");
 }

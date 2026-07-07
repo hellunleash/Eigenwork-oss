@@ -4,6 +4,7 @@ import {
   getCandidateDetail,
   getRoleCandidatesForExport,
   getCandidateResume,
+  getJobShareDetail,
   type CandidateLite,
   type JobLite,
   type CandidateDetail,
@@ -170,7 +171,7 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
         share_note: {
           type: SchemaType.STRING,
           description:
-            "OPTIONAL free-text extras to include ONLY in the shareable 'paste-ready' message — e.g. office city (Hyderabad), compensation (50–70k USD), or perks. NOT stored on the role and NEVER used for matching or filtering. Compose it compactly (e.g. 'On-site · Hyderabad · 50–70k USD'); include whatever the recruiter asks the post to mention. Never refuse these — this is where they go.",
+            "OPTIONAL free-text EXTRAS for the shareable post only — e.g. office CITY (Hyderabad), COMPENSATION (50–70k USD), or perks. The post already lists seniority, location, type, and experience automatically, so put ONLY the extras here (don't repeat those). Never stored on the role or used for matching. Never refuse these.",
         },
       },
     },
@@ -178,14 +179,14 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "share_message",
     description:
-      "Produce the 'paste-ready' shareable blurb for an EXISTING role's intake link (the message a recruiter posts to their network). Use this — NOT create_intake — when the recruiter already has the role and just wants the shareable message, the link to share, or wants to change what the message mentions. Never creates a new role or link. Pass share_note for free-text extras (office city, compensation, perks) that should appear only in the message.",
+      "Produce the 'paste-ready' shareable blurb for an EXISTING role's intake link (the message a recruiter posts to their network). Use this — NOT create_intake — when the recruiter already has the role and just wants the shareable message, the link to share, or wants to change what the message mentions. Never creates a new role or link. If you're unsure WHICH role they mean, call list_roles and ASK them to pick first. Pass share_note for free-text extras (office city, compensation, perks) that should appear only in the message.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
         jobId: { type: SchemaType.STRING, description: "Role id from list_roles." },
         share_note: {
           type: SchemaType.STRING,
-          description: "Optional free-text extras to mention in the message only — e.g. office city, compensation, perks. Compose compactly (e.g. 'On-site · Hyderabad · 50–70k USD').",
+          description: "Optional free-text EXTRAS for the message only — office city, compensation, perks. Seniority/location/type/experience are added automatically, so put ONLY the extras here.",
         },
       },
       required: ["jobId"],
@@ -329,12 +330,19 @@ async function readExportCandidates(args: Record<string, unknown>, ctx: ToolCtx)
  *  free-text extras the recruiter wants mentioned — no mutation, no new link. Reuses
  *  the SAME builder as finalizeIntake (no fork); jobId is validated against the
  *  caller's own org-scoped roles, so it can't address another org's role. */
-function readShareMessage(args: Record<string, unknown>, ctx: ToolCtx): ReadResult {
+async function readShareMessage(args: Record<string, unknown>, ctx: ToolCtx): Promise<ReadResult> {
   const jobId = typeof args.jobId === "string" ? args.jobId : "";
   const job = ctx.jobs.find((j) => j.id === jobId);
   if (!job) return { error: "I don't see that role. Ask me to list your roles first." };
   const note = typeof args.share_note === "string" ? args.share_note : "";
-  const message = buildShareMessage(job.title || "New role", intakeLink(jobId), note);
+  // Load the full role detail so an existing link's blurb carries the same complete
+  // detail line a fresh mint does (seniority · location · type · experience · extras).
+  const detail = await getJobShareDetail(ctx.orgId, jobId);
+  const message = buildShareMessage(intakeLink(jobId), {
+    ...(detail ?? {}),
+    title: detail?.title || job.title || "New role",
+    share_note: note,
+  });
   return {
     message,
     instruction: "Post the message value to the recruiter verbatim as the paste-ready blurb — keep the wording and the link as-is.",
@@ -443,8 +451,38 @@ function proposeRunMatch(args: Record<string, unknown>, ctx: ToolCtx): WriteResu
   return { proposal: confirmCard(prompt, "match_confirm", "match_cancel", JSON.stringify({ jobId, title })) };
 }
 
+// Recruiter phrasing that means "use my EXISTING link — do NOT mint a new one".
+// Kept deliberately narrow: only unambiguous reuse signals, so a legit new-role
+// request like "create a link for this role: …" is NOT caught (that says "this role",
+// never "this link" / "don't create another").
+const REUSE_EXISTING_LINK_RE =
+  /\b(same|existing|current|that|this)\s+link\b|\bdon'?t\s+(create|make|generate|open)\s+(another|a\s+new|a\s+different|new|one)\b|\bnot\s+another\s+(link|one)\b|\bno\s+new\s+link\b|\breuse\b|\buse\s+the\s+(existing|same|current)\s+(link|role|one)\b/i;
+
 async function proposeCreateIntake(args: Record<string, unknown>, ctx: ToolCtx): Promise<WriteResult> {
   const title = typeof args.title === "string" ? args.title : undefined;
+  const shareNote = typeof args.share_note === "string" ? args.share_note : "";
+
+  // BACKSTOP: the recruiter is asking for the shareable message on an EXISTING link,
+  // not a new role — never mint a duplicate. If exactly one role clearly matches,
+  // return that link's blurb (no mint); otherwise ASK which existing role. Reuses the
+  // same builder as the share_message tool.
+  if (REUSE_EXISTING_LINK_RE.test(ctx.text) && ctx.jobs.length > 0) {
+    const named = (title || ctx.text).toLowerCase();
+    const matches = ctx.jobs.filter((j) => j.title && named.includes(j.title.toLowerCase()));
+    const target = matches.length === 1 ? matches[0] : ctx.jobs.length === 1 ? ctx.jobs[0] : null;
+    if (target) {
+      const detail = await getJobShareDetail(ctx.orgId, target.id);
+      const msg = buildShareMessage(intakeLink(target.id), {
+        ...(detail ?? {}),
+        title: detail?.title || target.title || "New role",
+        share_note: shareNote,
+      });
+      return { proposal: { text: `Here's the shareable message for your existing *${target.title}* link — no new link created:\n\n${msg}` } };
+    }
+    const list = ctx.jobs.map((j, i) => `${i + 1}. *${j.title || "Untitled role"}* — ${intakeLink(j.id)}`).join("\n");
+    return { error: `I won't create a new link. Which existing role's shareable message do you want? Reply with the role (the links tell them apart):\n${list}` };
+  }
+
   // Parse ONLY an explicit jd_text (so a later gap-answer like "1" is never parsed
   // into skills); fall back to the raw turn solely for the has-content gate.
   const jdText = typeof args.jd_text === "string" && args.jd_text.trim() ? args.jd_text : undefined;
@@ -472,7 +510,7 @@ async function proposeCreateIntake(args: Record<string, unknown>, ctx: ToolCtx):
     yoe_required: typeof args.yoe_required === "string" ? args.yoe_required : undefined,
     workAuth,
     submission_cap: cap,
-    share_note: typeof args.share_note === "string" ? args.share_note : undefined,
+    share_note: shareNote,
   });
 
   // Still missing a required pick → tell the model exactly what to ask (with the
