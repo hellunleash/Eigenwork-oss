@@ -467,7 +467,7 @@ export default function PipelinesV2Page() {
       {/* Generate (shortlist) modal */}
       {generateModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !generateLoading && setGenerateModal(null)}>
-          <div className="bg-white dark:bg-white/[0.02] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.05]" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#161616] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.08]" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{generateLoading ? "Generating top candidates…" : "Generate top candidates now?"}</h3>
             {generateLoading ? (
               <>
@@ -492,7 +492,7 @@ export default function PipelinesV2Page() {
       {/* Single delete modal */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !deleteLoading && setDeleteModal(null)}>
-          <div className="bg-white dark:bg-white/[0.02] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.05]" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#161616] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.08]" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete this pipeline?</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">This will permanently delete <span className="font-medium text-gray-900 dark:text-gray-100">{deleteModal.title}</span>, all candidate submissions, and resume files. This cannot be undone.</p>
             <div className="flex gap-2 justify-end">
@@ -506,7 +506,7 @@ export default function PipelinesV2Page() {
       {/* Bulk delete modal */}
       {bulkDeleteOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !bulkBusy && setBulkDeleteOpen(false)}>
-          <div className="bg-white dark:bg-white/[0.02] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.05]" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#161616] rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-white/[0.08]" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete {selected.size} pipeline{selected.size === 1 ? "" : "s"}?</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">This permanently deletes the selected pipelines, all their candidate submissions, and resume files. This cannot be undone.</p>
             <div className="flex gap-2 justify-end">
