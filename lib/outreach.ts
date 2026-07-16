@@ -1,16 +1,23 @@
 /**
  * Outreach drafting (ADR-010 Phase 4 capability, platform-side first).
  *
- * Composes a personalized outreach email from a candidate's PERSISTED result
- * card — it never re-reads the resume or re-runs scoring. The personalization is
- * the candidate's own `card.edge` (their standout detail) + `card.title` (their
- * headline), both already jargon-scrubbed at creation (ADR-007 BANNED_TOKEN_RE),
- * so the draft is safe to surface to a recruiter / candidate.
+ * This is an INTERVIEW-SCHEDULING email — the recruiter has already decided to
+ * move forward and wants to set up a call. It deliberately carries NO evaluation
+ * content (no `card.edge`/`card.title`, no rubric-derived text of any kind): a
+ * candidate's own card fields are recruiter-facing ONLY (they can read as claims-
+ * verification / risk-assessment prose — see ADR-007 §8 / rubric-context.ts), so
+ * splicing them into a message the CANDIDATE reads was a leak, not a feature —
+ * "jargon-scrubbed" (no acronyms) was never the same bar as "safe to send
+ * externally." Keep this template purely logistical; if personalization is ever
+ * wanted here again, it needs its own explicitly candidate-safe field, never a
+ * reuse of `card.edge`/`card.title`.
  *
  * Deterministic template (no LLM) by design: instant, free, predictable, and the
- * shared core the Slack agent's `draft_outreach` tool will also call. The email
- * is delivered as a `mailto:` the recruiter sends from their OWN client — we
- * never send autonomously (the human-on-the-trigger gate, ADR-010 guardrail 6).
+ * shared core across all three callers — the Slack agent's `draft_outreach` tool
+ * (both the tool-calling and router paths) and the web app's "Draft outreach"
+ * button. The email is delivered as a `mailto:` the recruiter sends from their
+ * OWN client — we never send autonomously (the human-on-the-trigger gate, ADR-010
+ * guardrail 6).
  */
 
 export type OutreachDraft = { subject: string; body: string };
@@ -19,10 +26,6 @@ export type OutreachInput = {
   candidateName?: string | null;
   /** The JD title the recruiter is hiring for. */
   roleTitle?: string | null;
-  /** card.title — the candidate's recruiter-facing headline. */
-  cardTitle?: string | null;
-  /** card.edge — the candidate's standout detail. */
-  cardEdge?: string | null;
   /** The recruiter's display name, signed at the bottom. */
   recruiterName?: string | null;
 };
@@ -37,37 +40,31 @@ function clean(s?: string | null): string {
   return (s ?? "").trim().replace(/\s+/g, " ").replace(/[.\s]+$/, "");
 }
 
-function lowerFirst(s: string): string {
-  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
-}
-
 /**
- * Compose a subject + body. Every field is optional; the copy degrades cleanly
- * when a detail is missing (no dangling "as a" / "especially your work on").
+ * Compose a subject + body — a plain interview-scheduling message. Every field is
+ * optional; the copy degrades cleanly when a detail is missing. Deliberately no
+ * per-candidate evaluation content (see file header) — every candidate for a given
+ * role gets the same logistics-only message, differing only by name/role/recruiter.
  */
 export function composeOutreach(input: OutreachInput): OutreachDraft {
   const name = firstName(input.candidateName);
   const role = clean(input.roleTitle);
-  const title = clean(input.cardTitle);
-  const edge = clean(input.cardEdge);
   const recruiter = clean(input.recruiterName);
 
-  const subject = role ? `Quick chat about a ${role} role?` : "Quick chat about an opportunity?";
+  const subject = role ? `Interview for the ${role} role` : "Let's schedule your interview";
 
   const lines: string[] = [];
   lines.push(`Hi ${name},`);
   lines.push("");
 
-  let opener = "I came across your background";
-  if (title) opener += ` as a ${title}`;
-  opener += edge ? ` and was really impressed — especially your work on ${lowerFirst(edge)}.` : " and was really impressed.";
-  lines.push(opener);
+  lines.push(
+    role
+      ? `We'd like to move forward with your application for the ${role} role and set up a short interview.`
+      : "We'd like to move forward with your application and set up a short interview."
+  );
   lines.push("");
 
-  const pitch = role
-    ? `We're hiring for a ${role} role and I think there could be a strong fit. Would you be open to a short call this week to explore it?`
-    : "We're hiring and I think there could be a strong fit. Would you be open to a short call this week to explore it?";
-  lines.push(pitch);
+  lines.push("Could you share a few times that work for you this week?");
   lines.push("");
 
   lines.push("Best,");
@@ -88,48 +85,36 @@ export type OutreachItem = {
   name: string;
   email: string | null;
   roleTitle?: string | null;
-  cardTitle?: string | null;
-  cardEdge?: string | null;
 };
 
 /**
  * Render the bot's recruiter-facing outreach reply (ADR-011 capability gate).
  * Shared by both the router path and the tool path so the gate can't fork.
  *
- *   - PAID org (any active paid pass): full, ready-to-send drafts — a personalized
- *     email per candidate with a one-click `mailto:` the recruiter sends themselves.
- *   - FREE org: a factual TEASE — ONE real personalized preview (subject + the
- *     standout opener line) plus an upgrade nudge. The value is visible; only the
- *     send-ready drafts for the shortlist are gated to a paid plan.
+ *   - PAID org (any active paid pass): full, ready-to-send scheduling drafts for
+ *     the whole shortlist, each with a one-click `mailto:` the recruiter sends.
+ *   - FREE org: a factual TEASE — ONE real preview (subject + the scheduling
+ *     line) plus an upgrade nudge. The value is visible; only sending to the
+ *     whole shortlist in one go is gated to a paid plan.
  */
 export function renderOutreachReply(items: OutreachItem[], paid: boolean): string {
   if (items.length === 0) return "I couldn't load that candidate's details.";
 
   if (!paid) {
     const first = items[0];
-    const draft = composeOutreach({
-      candidateName: first.name,
-      roleTitle: first.roleTitle ?? null,
-      cardTitle: first.cardTitle ?? null,
-      cardEdge: first.cardEdge ?? null,
-    });
-    const opener = draft.body.split("\n")[2] ?? ""; // the personalized standout line
+    const draft = composeOutreach({ candidateName: first.name, roleTitle: first.roleTitle ?? null });
+    const askLine = draft.body.split("\n")[2] ?? ""; // the "move forward / set up a call" line
     return [
       `✍️ Here's a preview of the interview outreach I'd send *${first.name}*:`,
       `_Subject:_ ${draft.subject}`,
-      opener,
+      askLine,
       "",
-      "Ready-to-send outreach for your whole shortlist — personalized per candidate, one click to your inbox — is on the paid plans. *Upgrade* and I'll draft and queue it for anyone you pick.",
+      "Ready-to-send scheduling emails for your whole shortlist, one click to your inbox, is on the paid plans. *Upgrade* and I'll draft and queue it for anyone you pick.",
     ].join("\n");
   }
 
   const parts = items.map((d) => {
-    const draft = composeOutreach({
-      candidateName: d.name,
-      roleTitle: d.roleTitle ?? null,
-      cardTitle: d.cardTitle ?? null,
-      cardEdge: d.cardEdge ?? null,
-    });
+    const draft = composeOutreach({ candidateName: d.name, roleTitle: d.roleTitle ?? null });
     if (!d.email) return `*${d.name}* — no email on file, can't draft outreach.`;
     const mailto = buildMailto(d.email, draft);
     return `*${d.name}* — _${draft.subject}_\n${draft.body}\n<${mailto}|📧 Open in your email to send>`;

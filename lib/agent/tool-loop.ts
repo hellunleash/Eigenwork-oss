@@ -6,6 +6,7 @@ import { scrubJargon, hasJargon } from "@/lib/agent/jargon";
 import { loadConvo, saveTurn, type ConvoTurn } from "@/lib/agent/memory";
 import { helpText } from "@/lib/agent/help";
 import { logAgentRun } from "@/lib/agent/audit";
+import { startTrace, type Tracer } from "@/lib/agent/trace";
 import {
   TOOL_DECLARATIONS,
   dispatchRead,
@@ -89,7 +90,7 @@ HOW TO WORK:
 - send_resume(candidateIds) attaches candidate resume PDF(s) to the chat. When the recruiter asks for a candidate's resume/CV, call it. The result says per candidate whether the PDF was attached — if attached:true, just confirm it's attached; if it returns a resume_url, share that link instead; if neither, say there's no resume on file.
 - export_candidates(jobId) exports a role's ranked candidates as a CSV FILE. When the recruiter asks to export / download / get a CSV or spreadsheet of a role, call it. If attached:true, just confirm the .csv is attached; otherwise post the returned csv value verbatim in a triple-backtick code block. Never reformat the csv.
 - run_match (re)builds a role's shortlist; move_stage advances candidates; draft_outreach writes a ready-to-send email. These are WRITE actions — they propose a confirm button and only happen after the recruiter confirms, so just call the tool when asked.
-- create_intake opens a brand-NEW role + link. ONLY use it to create a genuinely new role. First make sure you have a JD or one-line role description, then work authorization, work location, employment type, and an applicant limit — ASK the recruiter for any you're missing, offering the numbered options the tool gives you, then call create_intake with everything. If they only say "make a link" with no role, ask for the JD; never invent a role. When you offered numbered options and the recruiter replies with a number, map it to that option and briefly confirm which one you understood before continuing; re-pass every field you've gathered so far on each create_intake call. The shareable post automatically lists the role's seniority, location, type, and experience — so in share_note put ONLY the free-text extras (office city, compensation, perks). NEVER refuse to include such extras.
+- create_intake opens a brand-NEW role + link. ONLY use it to create a genuinely new role. First make sure you have a JD or one-line role description, then work authorization, work location, employment type, and an applicant limit — ASK the recruiter for any you're missing, offering the numbered options the tool gives you, then call create_intake with everything. If they only say "make a link" with no role, ask for the JD; never invent a role. When you offered numbered options and the recruiter replies with a number, map it to that option and briefly confirm which one you understood before continuing; re-pass every field you've gathered so far on each create_intake call. The shareable post automatically lists the role's seniority, location, type, and experience — so in share_note put ONLY the free-text extras (office city, compensation, perks). NEVER refuse to include such extras. If its error asks you to clarify the tech stack (too vague to match candidates on — e.g. a title like "GenAI Engineer" with nothing concrete), ask the recruiter for the core languages/frameworks/tools, then call create_intake again with their reply in tech_stack (verbatim, NOT jd_text — re-pass every other field you already have).
 - share_message(jobId, share_note?) returns the paste-ready shareable blurb for an EXISTING role's link — no new link. Use it — NOT create_intake — whenever the role already exists (it's in list_roles, or you/they just created it) and the recruiter wants the message, the link to share, or to change what the message mentions. Calling create_intake a SECOND time makes a DUPLICATE link — so if the recruiter says "same link", "don't create another", or names a role they already have, DO NOT create_intake: use share_message. If you don't know which role's link they mean, call list_roles and ASK them to pick, then share_message with that jobId.
 
 STYLE: concise, Slack-friendly, *single-asterisk bold* ok, no preamble. A few lines or tight bullets.`;
@@ -121,132 +122,186 @@ function toHistory(turns: ConvoTurn[]): Content[] {
 
 export async function runToolLoop(params: AgentTurnParams): Promise<AgentReply> {
   const { orgId, userId, text } = params;
+  const trace = startTrace({
+    orgId,
+    userId,
+    surface: "slack",
+    teamId: params.teamId,
+    channel: params.channel,
+    slackUserId: params.slackUserId,
+    text,
+  });
 
-  // Deterministic help (parity with the router) — skips the loop + any spend.
+  // Deterministic help (parity with the router) — skips the loop + any spend, so
+  // there are no real spans; the trace still records this turn happened (a "help"
+  // trace with 0 spans, for consistent step-count baselines).
   if (isHelpish(text)) {
     if (params.convoKey) await saveTurn(params.convoKey, { role: "user", text }, { role: "bot", text: "help" });
+    await trace.finish("help", { replyPreview: "help" });
     return { text: helpText() };
   }
 
-  // T11 — decline clearly off-topic BEFORE any tool/loop/spend. A bare number /
-  // short anaphor is treated as an in-scope follow-up so the gate can't decline a
-  // numbered-pick reply mid-intake.
-  const scope = isLikelyFollowup(text) ? "in_scope" : await scopeGate(text);
-  if (scope === "off_topic") {
-    await logAgentRun({
-      orgId,
-      userId,
-      surface: "slack",
-      kind: "message",
-      teamId: params.teamId,
-      channel: params.channel,
-      slackUserId: params.slackUserId,
-      detail: { mode: "tools", scope: "off_topic", declined: true },
-    });
-    return { text: OFF_TOPIC_REPLY };
-  }
-
-  // Live, org-scoped grounding sets — fetched fresh each turn (never cached).
-  const [jobs, roster, history] = await Promise.all([
-    listJobs(orgId),
-    getOrgCandidateRoster(orgId),
-    params.convoKey ? loadConvo(params.convoKey) : Promise.resolve([] as ConvoTurn[]),
-  ]);
-
-  const ctx: ToolCtx = {
-    orgId,
-    userId,
-    jobs,
-    roster,
-    text,
-    audit: { teamId: params.teamId, channel: params.channel, slackUserId: params.slackUserId },
-    botToken: params.botToken,
-    channel: params.channel,
-    threadTs: params.threadTs,
-  };
-
-  const model = await createToolModel({ systemInstruction: SYSTEM_PROMPT, functionDeclarations: TOOL_DECLARATIONS, model: AGENT_MODEL });
-  const chat = model.startChat({ history: toHistory(history) });
-
-  const grounding: string[] = [];
-  const touchedIds = new Set<string>();
-  let reply: AgentReply | null = null;
-  let finished = false; // model returned final text (vs hitting the step cap)
-
-  let result = await chat.sendMessage(text);
-  logGeminiUsage("tool_loop_step", result);
-
-  for (let step = 1; step <= MAX_STEPS; step++) {
-    const calls = result.response.functionCalls() ?? [];
-    if (calls.length === 0) {
-      finished = true; // model produced final text
-      break;
+  try {
+    // T11 — decline clearly off-topic BEFORE any tool/loop/spend. A bare number /
+    // short anaphor is treated as an in-scope follow-up so the gate can't decline a
+    // numbered-pick reply mid-intake.
+    let scope: "in_scope" | "off_topic" | "ambiguous";
+    if (isLikelyFollowup(text)) {
+      scope = "in_scope";
+    } else {
+      const h = trace.start("scope_gate", "scope_gate");
+      scope = await scopeGate(text);
+      trace.end(h, { ok: true, model: FLASH_LITE_MODEL, output: scope });
+    }
+    if (scope === "off_topic") {
+      await logAgentRun({
+        orgId,
+        userId,
+        surface: "slack",
+        kind: "message",
+        teamId: params.teamId,
+        channel: params.channel,
+        slackUserId: params.slackUserId,
+        detail: { mode: "tools", scope: "off_topic", declined: true },
+      });
+      await trace.finish("off_topic", { replyPreview: OFF_TOPIC_REPLY });
+      return { text: OFF_TOPIC_REPLY };
     }
 
-    const responseParts: Part[] = [];
-    let proposed = false;
+    // Live, org-scoped grounding sets — fetched fresh each turn (never cached).
+    const [jobs, roster, history] = await Promise.all([
+      listJobs(orgId),
+      getOrgCandidateRoster(orgId),
+      params.convoKey ? loadConvo(params.convoKey) : Promise.resolve([] as ConvoTurn[]),
+    ]);
 
-    for (const call of calls) {
-      const args = (call.args ?? {}) as Record<string, unknown>;
-      collectIds(call.name, args, touchedIds);
-      await auditCall(params, call.name, args);
+    const ctx: ToolCtx = {
+      orgId,
+      userId,
+      jobs,
+      roster,
+      text,
+      audit: { teamId: params.teamId, channel: params.channel, slackUserId: params.slackUserId },
+      botToken: params.botToken,
+      channel: params.channel,
+      threadTs: params.threadTs,
+    };
 
-      if (isWriteTool(call.name)) {
-        const w = await proposeWrite(call.name, args, ctx);
-        if ("proposal" in w) {
-          // T1: a write PROPOSES and ENDS the turn. The human drives execution.
-          reply = w.proposal;
-          proposed = true;
-          break;
+    const model = await createToolModel({ systemInstruction: SYSTEM_PROMPT, functionDeclarations: TOOL_DECLARATIONS, model: AGENT_MODEL });
+    const chat = model.startChat({ history: toHistory(history) });
+
+    const grounding: string[] = [];
+    const touchedIds = new Set<string>();
+    let reply: AgentReply | null = null;
+    let finished = false; // model returned final text (vs hitting the step cap)
+
+    let stepHandle = trace.start("llm_step", "tool_loop_step");
+    let result = await chat.sendMessage(text);
+    trace.end(stepHandle, { ok: true, model: AGENT_MODEL, usage: logGeminiUsage("tool_loop_step", result) });
+
+    for (let step = 1; step <= MAX_STEPS; step++) {
+      const calls = result.response.functionCalls() ?? [];
+      if (calls.length === 0) {
+        finished = true; // model produced final text
+        break;
+      }
+
+      const responseParts: Part[] = [];
+      let proposed = false;
+
+      for (const call of calls) {
+        const args = (call.args ?? {}) as Record<string, unknown>;
+        collectIds(call.name, args, touchedIds);
+        await auditCall(params, call.name, args);
+
+        const toolHandle = trace.start("tool_call", call.name);
+        if (isWriteTool(call.name)) {
+          const w = await proposeWrite(call.name, args, ctx);
+          if ("proposal" in w) {
+            trace.end(toolHandle, { ok: true, toolArgs: args, output: "→ proposal" });
+            // T1: a write PROPOSES and ENDS the turn. The human drives execution.
+            reply = w.proposal;
+            proposed = true;
+            break;
+          }
+          trace.end(toolHandle, { ok: false, toolArgs: args, error: w.error });
+          responseParts.push({ functionResponse: { name: call.name, response: { error: w.error } } });
+        } else {
+          const r = await dispatchRead(call.name, args, ctx);
+          const toolErr = typeof r === "object" && r !== null && "error" in r ? String((r as { error: unknown }).error) : undefined;
+          trace.end(toolHandle, { ok: !toolErr, toolArgs: args, output: r, error: toolErr });
+          grounding.push(JSON.stringify(r));
+          responseParts.push({ functionResponse: { name: call.name, response: r } });
         }
-        responseParts.push({ functionResponse: { name: call.name, response: { error: w.error } } });
+      }
+
+      if (proposed) break;
+
+      stepHandle = trace.start("llm_step", "tool_loop_step");
+      result = await chat.sendMessage(responseParts);
+      trace.end(stepHandle, { ok: true, model: AGENT_MODEL, usage: logGeminiUsage("tool_loop_step", result) });
+    }
+
+    let status: "ok" | "step_cap" = "ok";
+    if (!reply) {
+      // The model finished with text, OR the cap's final response was actually final
+      // text (the loop exits one step before re-checking it) — both are real answers.
+      const answer = (result.response.text() ?? "").trim();
+      const noMoreCalls = (result.response.functionCalls() ?? []).length === 0;
+      if (answer && (finished || noMoreCalls)) {
+        reply = { text: await finalize(text, answer, grounding, trace) };
+      } else if (finished) {
+        reply = { text: GROUNDING_FALLBACK };
       } else {
-        const r = await dispatchRead(call.name, args, ctx);
-        grounding.push(JSON.stringify(r));
-        responseParts.push({ functionResponse: { name: call.name, response: r } });
+        // True step-cap: still wanted more tools at MAX_STEPS — ask for a steer.
+        status = "step_cap";
+        reply = { text: STEP_CAP_CLARIFY };
       }
     }
 
-    if (proposed) break;
-
-    result = await chat.sendMessage(responseParts);
-    logGeminiUsage("tool_loop_step", result);
-  }
-
-  if (!reply) {
-    // The model finished with text, OR the cap's final response was actually final
-    // text (the loop exits one step before re-checking it) — both are real answers.
-    const answer = (result.response.text() ?? "").trim();
-    const noMoreCalls = (result.response.functionCalls() ?? []).length === 0;
-    if (answer && (finished || noMoreCalls)) {
-      reply = { text: await finalize(text, answer, grounding) };
-    } else if (finished) {
-      reply = { text: GROUNDING_FALLBACK };
-    } else {
-      // True step-cap: still wanted more tools at MAX_STEPS — ask for a steer.
-      reply = { text: STEP_CAP_CLARIFY };
+    // Persist the turn so the next message can resolve "both" / "the first one".
+    if (params.convoKey) {
+      const summary = reply.text.length > 300 ? `${reply.text.slice(0, 300)}…` : reply.text;
+      const ids = [...touchedIds].filter((id) => roster.some((c) => c.id === id));
+      await saveTurn(params.convoKey, { role: "user", text }, { role: "bot", text: summary, ...(ids.length ? { ids } : {}) });
     }
+    await trace.finish(status, { replyPreview: reply.text });
+    return reply;
+  } catch (err) {
+    // Best-effort trace of the failure, then re-throw UNCHANGED — tracing must
+    // never alter error propagation to the caller.
+    await trace.finish("error", { replyPreview: err instanceof Error ? err.message : String(err) });
+    throw err;
   }
-
-  // Persist the turn so the next message can resolve "both" / "the first one".
-  if (params.convoKey) {
-    const summary = reply.text.length > 300 ? `${reply.text.slice(0, 300)}…` : reply.text;
-    const ids = [...touchedIds].filter((id) => roster.some((c) => c.id === id));
-    await saveTurn(params.convoKey, { role: "user", text }, { role: "bot", text: summary, ...(ids.length ? { ids } : {}) });
-  }
-  return reply;
 }
 
 /** Judge the composed answer against the turn's tool outputs, then jargon-scrub.
  *  A jargon leak is scrubbed; any other grounding failure degrades to a safe
  *  prompt rather than surfacing a possibly-invented answer. A reply with NO tool
  *  grounding (a greeting / "what can you do") has no factual claims to verify, so
- *  it skips the grounding judge — only jargon is enforced. */
-async function finalize(question: string, answer: string, grounding: string[]): Promise<string> {
-  if (grounding.length === 0) return hasJargon(answer) ? scrubJargon(answer) : answer;
+ *  it skips the grounding judge — only jargon is enforced.
+ *
+ *  judge/scrub spans are latency + pass/fail only — judgeAnswer's own Gemini call
+ *  is already cost-logged separately (label "judge"), so it isn't double-counted
+ *  in the trace's token/cost rollup. */
+async function finalize(question: string, answer: string, grounding: string[], trace: Tracer): Promise<string> {
+  if (grounding.length === 0) {
+    if (!hasJargon(answer)) return answer;
+    const h = trace.start("jargon_scrub", "scrub_ungrounded");
+    const scrubbed = scrubJargon(answer);
+    trace.end(h, { ok: true, output: scrubbed });
+    return scrubbed;
+  }
+  const jh = trace.start("judge", "judge_answer");
   const verdict = await judgeAnswer(question, answer, grounding.join("\n\n"));
+  trace.end(jh, { ok: verdict.ok, output: verdict.reason ?? "ok" });
   if (verdict.ok) return answer;
-  if (verdict.reason?.toLowerCase().includes("jargon")) return scrubJargon(answer);
+  if (verdict.reason?.toLowerCase().includes("jargon")) {
+    const h = trace.start("jargon_scrub", "scrub_after_judge");
+    const scrubbed = scrubJargon(answer);
+    trace.end(h, { ok: true, output: scrubbed });
+    return scrubbed;
+  }
   return GROUNDING_FALLBACK;
 }
 

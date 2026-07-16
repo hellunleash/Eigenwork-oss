@@ -47,12 +47,9 @@ export async function POST(req: Request, context: RouteContext) {
     }
     const jd = jdSnap.data() as Record<string, unknown>;
 
-    const card = candidate.card as { title?: unknown; edge?: unknown } | undefined;
     const draft = composeOutreach({
       candidateName: typeof candidate.candidateName === "string" ? candidate.candidateName : null,
       roleTitle: typeof jd.title === "string" ? jd.title : null,
-      cardTitle: typeof card?.title === "string" ? card.title : null,
-      cardEdge: typeof card?.edge === "string" ? card.edge : null,
     });
 
     const email = typeof candidate.email === "string" && candidate.email.trim() ? candidate.email.trim() : null;

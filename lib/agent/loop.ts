@@ -230,7 +230,7 @@ async function buildOutreachDrafts(orgId: string, route: RouterResult, params: A
 
   const paid = await canUseBotWrites(orgId);
   const text = renderOutreachReply(
-    details.map((d) => ({ name: d.name, email: d.email, roleTitle: d.jobTitle, cardTitle: d.card?.title ?? null, cardEdge: d.card?.edge ?? null })),
+    details.map((d) => ({ name: d.name, email: d.email, roleTitle: d.jobTitle })),
     paid
   );
 

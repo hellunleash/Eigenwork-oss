@@ -87,7 +87,22 @@ export type DraftInput = {
   submission_cap?: number | null;
   /** Free text to mention only in the shareable message (city, comp, perks). */
   share_note?: string;
+  /** Explicit tech-stack answer (e.g. "Python, React, Postgres") — the recruiter's
+   *  reply to the "stack" gap. Split deterministically into primary/secondary,
+   *  overriding whatever the JD parse produced (only ever sent when that was empty
+   *  or vague). */
+  stackHint?: string;
 };
+
+/** Split a free-text stack answer ("Python, React, Postgres") into items — no LLM
+ *  call, since these are already named individual technologies. Shared by the
+ *  "stack" gap answer (router path) and stackHint (tool-calling path). */
+export function splitStackText(text: string): string[] {
+  return text
+    .split(/[,;]|\band\b/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /** Parse the recruiter's request into a full draft (same parse the web flow uses),
  *  overlaying any fields the caller supplied explicitly. The JD parser never
@@ -101,6 +116,13 @@ export async function assembleDraft(input: DraftInput): Promise<IntakeDraft> {
       parsed = null;
     }
   }
+  // An explicit stack answer overrides the parse — it's only ever sent because the
+  // parse came back empty/vague, so it always wins when present.
+  const stackItems = input.stackHint?.trim() ? splitStackText(input.stackHint) : [];
+  const primary = stackItems.length ? stackItems.slice(0, 3) : parsed?.primary ?? [];
+  const secondary = stackItems.length
+    ? [...new Set([...(parsed?.secondary ?? []), ...stackItems.slice(3)])]
+    : parsed?.secondary ?? [];
   return {
     title: input.title || parsed?.title || "New role",
     seniority: input.seniority ?? parsed?.seniority ?? "",
@@ -113,8 +135,8 @@ export async function assembleDraft(input: DraftInput): Promise<IntakeDraft> {
     work_auth_eu_required: Boolean(input.workAuth?.eu),
     work_auth_provided: Boolean(input.workAuth?.provided),
     work_auth_answered: Boolean(input.workAuth?.answered),
-    primary: parsed?.primary ?? [],
-    secondary: parsed?.secondary ?? [],
+    primary,
+    secondary,
     tertiary: parsed?.tertiary ?? [],
     ml_mode: parsed?.ml_mode ?? "n/a",
     in_scope: parsed?.in_scope ?? true,
@@ -191,16 +213,20 @@ export function askForJd(): string {
 
 /**
  * The fields the recruiter must settle that the JD can't fill in, in the order we
- * ask for any still missing. Work-auth is never in a JD's parsed output, so it's
+ * ask for any still missing. `stack` comes first — a role with no concrete primary
+ * tech is too vague to match candidates against (a JD parse that only yields a
+ * buzzword like "GenAI" is stripped before this check, see jd-parse.ts), so it's
+ * asked before anything else. Work-auth is never in a JD's parsed output, so it's
  * asked unless stated; location/employment are asked only when the parser left them
  * blank; the applicant limit (never in a JD) is asked last, like the web confirm
  * page's Pipeline Settings. Everything else stays autofilled.
  */
-export const GAP_ORDER = ["work_auth", "location_type", "employment_type", "applicant_limit"] as const;
+export const GAP_ORDER = ["stack", "work_auth", "location_type", "employment_type", "applicant_limit"] as const;
 export type Gap = (typeof GAP_ORDER)[number];
 
 /** First field still needing input, in GAP_ORDER, or null when the draft is complete. */
 export function firstGap(d: IntakeDraft): Gap | null {
+  if (d.primary.length === 0) return "stack";
   if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
     return "work_auth";
   }
@@ -213,6 +239,9 @@ export function firstGap(d: IntakeDraft): Gap | null {
 /** The numbered question for a gap — options come straight from lib/jd-options
  *  (same choices the web confirm page shows), so the recruiter just replies a number. */
 export function askGap(g: Gap): string {
+  if (g === "stack") {
+    return "🧰 This role's tech stack isn't clear enough to match candidates well — what are the core languages/frameworks/tools? (e.g. *Python, React, Postgres*)";
+  }
   if (g === "work_auth") {
     return [
       "🛂 What *work authorization* does this role require? Reply with the number:",
@@ -238,6 +267,16 @@ export function askGap(g: Gap): string {
  *  Returns the updated draft, or null if it isn't a recognizable answer for that
  *  field (so the caller falls back to its LLM path for edits/confirm/cancel). */
 export function applyGapAnswer(d: IntakeDraft, gap: Gap, text: string): IntakeDraft | null {
+  if (gap === "stack") {
+    // Original casing preserved (e.g. "Postgres", not "postgres") — this isn't a
+    // numbered pick, it's the recruiter naming real technologies.
+    const items = splitStackText(text);
+    if (items.length === 0) return null;
+    const primary = items.slice(0, 3);
+    const secondary = [...new Set([...d.secondary, ...items.slice(3)])];
+    return { ...d, primary, secondary };
+  }
+
   const t = text.trim().toLowerCase();
   const numMatch = t.match(/^#?\s*(\d+)/);
   const n = numMatch ? parseInt(numMatch[1], 10) : NaN;
@@ -284,7 +323,6 @@ export function applyGapAnswer(d: IntakeDraft, gap: Gap, text: string): IntakeDr
  *  flagged. No trailing instruction; the caller appends the next gap question
  *  or the confirm footer. */
 export function draftSummary(d: IntakeDraft): string {
-  const skills = [...d.primary, ...d.secondary, ...d.tertiary];
   const set = (v: string) => (v && v.trim() ? v : "_not set_");
   let auth: string;
   if (!d.work_auth_answered && !(d.work_auth_us_required || d.work_auth_eu_required || d.work_auth_provided)) {
@@ -304,8 +342,12 @@ export function draftSummary(d: IntakeDraft): string {
     `• Experience: ${set(d.yoe_required)}`,
     `• Work auth: ${auth}`,
     `• Applicant limit: ${d.submission_cap != null ? String(d.submission_cap) : "_to be set_"}`,
-    `• Skills: ${skills.length ? skills.join(", ") : "_none detected_"}`,
+    // Shown separately (not merged) so a vague/empty primary stack is visible before
+    // confirming — the recruiter catches it here, not after the role is created.
+    `• Primary stack: ${d.primary.length ? d.primary.join(", ") : "_none detected — I'll ask_"}`,
+    `• Secondary stack: ${d.secondary.length ? d.secondary.join(", ") : "_none_"}`,
   ];
+  if (d.tertiary.length) lines.push(`• Also: ${d.tertiary.join(", ")}`);
   if (d.share_note.trim()) lines.push(`• Also in the share message: ${d.share_note.trim()}`);
   return lines.join("\n");
 }
@@ -417,6 +459,8 @@ export async function finalizeIntake(
   return [
     `✅ Done — intake link for *${d.title}*:`,
     link,
+    "",
+    "I'll ping you here once it's 60%+ filled and ready to shortlist.",
     "",
     buildShareMessage(link, d),
   ].join("\n");

@@ -158,6 +158,11 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
       properties: {
         jd_text: { type: SchemaType.STRING, description: "The pasted JD or a one-line role description (title + seniority + key stack). Parsed for skills." },
         title: { type: SchemaType.STRING, description: "Role title, if stated separately from jd_text." },
+        tech_stack: {
+          type: SchemaType.STRING,
+          description:
+            "Free-text core technologies for this role (e.g. 'Python, React, Postgres') — ONLY set this when you called create_intake and its error asked you to clarify a vague/missing stack, then relay the recruiter's reply here VERBATIM. Do not put this in jd_text (that re-parses the whole role and can clobber fields you already gathered).",
+        },
         seniority: { type: SchemaType.STRING, description: "e.g. junior, mid, senior." },
         location_type: { type: SchemaType.STRING, format: "enum", enum: ["Remote", "Hybrid", "On-site"], description: "Work location." },
         employment_type: { type: SchemaType.STRING, format: "enum", enum: ["Full-time", "Intern", "Contract"], description: "Employment type." },
@@ -512,6 +517,7 @@ async function proposeCreateIntake(args: Record<string, unknown>, ctx: ToolCtx):
     workAuth,
     submission_cap: cap,
     share_note: shareNote,
+    stackHint: typeof args.tech_stack === "string" ? args.tech_stack : undefined,
   });
 
   // Scope gate: reject roles outside software/data/ML/QA BEFORE proposing anything —
@@ -583,7 +589,7 @@ async function proposeDraftOutreach(args: Record<string, unknown>, ctx: ToolCtx)
   // preview + upgrade nudge (the gate logic is shared, not forked — lib/outreach.ts).
   const paid = await canUseBotWrites(ctx.orgId);
   const text = renderOutreachReply(
-    details.map((d) => ({ name: d.name, email: d.email, roleTitle: d.jobTitle, cardTitle: d.card?.title ?? null, cardEdge: d.card?.edge ?? null })),
+    details.map((d) => ({ name: d.name, email: d.email, roleTitle: d.jobTitle })),
     paid
   );
 

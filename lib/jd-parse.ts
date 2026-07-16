@@ -23,9 +23,9 @@ Output ONLY a valid JSON object with exactly these fields (no markdown, no comme
   "seniority": "string — e.g. Junior, Mid, Senior, Lead",
   "role_category": "string — e.g. Backend, Frontend, Fullstack, DevOps",
   "tech_stack": ["string"] — array of technologies/tools mentioned,
-  "primary": ["string"] — single core language/stack (e.g., Python, Node, Java, C#, Go)(e.g. main language, primary framework, primary DB). 2-3 core items only.",
-  "secondary": ["string"] —  key supporting frameworks/tools (array). 3–8 items.",
-  "tertiary": ["string"] — optional supporting tools . 2–5 items.",
+  "primary": ["string"] — 2-3 CONCRETE named languages/frameworks/tools a candidate could literally list on a resume or repo (e.g. Python, Node, Java, C#, Go, React). NEVER a buzzword, umbrella term, or job-title fragment (e.g. never 'GenAI', 'AI', 'ML', 'Full Stack', 'Cloud', 'DevOps' as an entry — those describe the ROLE, not a skill). If the text names no concrete technology, return an EMPTY array rather than inventing one from the title.",
+  "secondary": ["string"] — 3–8 supporting concrete tools/frameworks (array). Same rule as primary: concrete only, never a buzzword.",
+  "tertiary": ["string"] — 2–5 optional supporting tools. Same rule as primary.",
   "location_type": "string — e.g. Remote, Onsite, Hybrid",
   "yoe_required": "string — years of experience required",
   "employment_type": "string — e.g. Full-time, Contract, Intern",
@@ -71,6 +71,26 @@ function toStrArray(val: unknown): string[] {
   return val.map((x) => String(x).trim()).filter(Boolean);
 }
 
+// Buzzwords/umbrella terms that describe a ROLE, not a skill a candidate could list
+// (e.g. a JD titled "Full Stack GenAI Engineer" with no real stack info once made the
+// parser echo "GenAI" straight into primary — useless for matching). Defense in depth
+// on top of the prompt rule above: exact match only (case/space/hyphen-insensitive) so
+// a real technology name is never caught.
+const VAGUE_STACK_TERMS = new Set([
+  "genai", "gen ai", "generative ai", "ai", "ml", "ai/ml", "ml/ai",
+  "machine learning", "artificial intelligence", "full stack", "fullstack",
+  "cloud", "devops", "software", "software engineering", "engineering",
+  "technology", "tech", "backend", "back end", "frontend", "front end", "web",
+]);
+
+function normalizeStackToken(s: string): string {
+  return s.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+}
+
+function stripVagueStackTerms(arr: string[]): string[] {
+  return arr.filter((s) => !VAGUE_STACK_TERMS.has(normalizeStackToken(s)));
+}
+
 function getGenAI(): GoogleGenerativeAI {
   return new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 }
@@ -89,9 +109,9 @@ async function runParseModel(text: string, modelName: string): Promise<ParsedJD>
     seniority: String(parsed.seniority ?? ""),
     role_category: String(parsed.role_category ?? ""),
     tech_stack: toStrArray(parsed.tech_stack),
-    primary: toStrArray(parsed.primary),
-    secondary: toStrArray(parsed.secondary),
-    tertiary: toStrArray(parsed.tertiary),
+    primary: stripVagueStackTerms(toStrArray(parsed.primary)),
+    secondary: stripVagueStackTerms(toStrArray(parsed.secondary)),
+    tertiary: stripVagueStackTerms(toStrArray(parsed.tertiary)),
     location_type: String(parsed.location_type ?? ""),
     yoe_required: String(parsed.yoe_required ?? ""),
     employment_type: String(parsed.employment_type ?? ""),
