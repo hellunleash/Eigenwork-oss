@@ -1,5 +1,6 @@
 import { createJd } from "@/lib/jd";
 import { parseJdText, coerceMlMode, type MlMode } from "@/lib/jd-parse";
+export { UNSUPPORTED_ROLE_MESSAGE } from "@/lib/jd-parse";
 import { buildOneLiner, cleanTitle } from "@/lib/jd-role-fit";
 import {
   WORK_AUTH_OPTIONS,
@@ -57,6 +58,10 @@ export type IntakeDraft = {
    *  vs both vs n/a). Threaded through to createJd so a bot-minted JD carries the
    *  same ml_mode a web-minted one does. */
   ml_mode: MlMode;
+  /** false only when the parsed JD was explicitly classified as outside
+   *  software/data/ML/QA. Callers check this BEFORE proposing/minting and reject
+   *  with UNSUPPORTED_ROLE_MESSAGE instead — never persisted, never a JD field. */
+  in_scope: boolean;
   /** Applicant cap — the intake link closes when it's reached, and shortlisting
    *  unlocks at 60% of it. null until the recruiter sets it; createJd defaults to
    *  100 if it's never provided (e.g. they confirm before answering). */
@@ -112,6 +117,7 @@ export async function assembleDraft(input: DraftInput): Promise<IntakeDraft> {
     secondary: parsed?.secondary ?? [],
     tertiary: parsed?.tertiary ?? [],
     ml_mode: parsed?.ml_mode ?? "n/a",
+    in_scope: parsed?.in_scope ?? true,
     submission_cap: input.submission_cap ?? null,
     share_note: input.share_note?.trim() || "",
   };
@@ -139,6 +145,8 @@ export function asDraft(p: Record<string, unknown> | null): IntakeDraft | null {
     secondary: a("secondary"),
     tertiary: a("tertiary"),
     ml_mode: coerceMlMode(p.ml_mode),
+    // Rehydrated drafts already passed the scope gate at propose time; default true.
+    in_scope: p.in_scope !== false,
     submission_cap: typeof p.submission_cap === "number" ? (p.submission_cap as number) : null,
     share_note: s("share_note"),
   };

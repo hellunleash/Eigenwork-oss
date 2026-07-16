@@ -29,7 +29,8 @@ Output ONLY a valid JSON object with exactly these fields (no markdown, no comme
   "location_type": "string — e.g. Remote, Onsite, Hybrid",
   "yoe_required": "string — years of experience required",
   "employment_type": "string — e.g. Full-time, Contract, Intern",
-  "ml_mode": "one of builds_models | integrates_models | both | n/a — what the ROLE requires. builds_models = must train/fine-tune/architect models (PyTorch, TensorFlow, training, VAEs/GANs, classical ML). integrates_models = build LLM apps / integrate hosted model APIs WITHOUT training (OpenAI/Anthropic/Gemini, LangChain, RAG, prompting, agents). both = requires both. n/a = not an AI/ML role. Judge from the JD's actual requirements, not buzzwords."
+  "ml_mode": "one of builds_models | integrates_models | both | n/a — what the ROLE requires. builds_models = must train/fine-tune/architect models (PyTorch, TensorFlow, training, VAEs/GANs, classical ML). integrates_models = build LLM apps / integrate hosted model APIs WITHOUT training (OpenAI/Anthropic/Gemini, LangChain, RAG, prompting, agents). both = requires both. n/a = not an AI/ML role. Judge from the JD's actual requirements, not buzzwords.",
+  "in_scope": "boolean — true if this is a software, data, ML/AI, or QA engineering role (backend, frontend, fullstack, mobile, data engineering, data science, ML/AI engineering, DevOps/SRE, QA/test automation, security engineering, etc. — anything evaluated on code or a GitHub/portfolio). false for any role outside that, e.g. mechanical, electrical, civil, chemical, biomedical, or other hardware engineering; sales, marketing, finance, legal, HR, operations, or design-only roles. Judge from the actual requirements, not the title alone."
 }
 Classify technologies from the JD into primary (core),secondary (important), and tertiary (supporting). Each array must contain only non-empty strings.
 `;
@@ -56,7 +57,14 @@ export type ParsedJD = {
   yoe_required: string;
   employment_type: string;
   ml_mode: MlMode;
+  /** false only when the model explicitly classifies the role as outside
+   *  software/data/ML/QA (see JD_PARSE_SCHEMA). Defaults true on a missing/invalid
+   *  value — a scope MISS never blocks a legitimate role. */
+  in_scope: boolean;
 };
+
+/** The single line shown (web + Slack) when a JD is rejected as out of scope. */
+export const UNSUPPORTED_ROLE_MESSAGE = "EigenWork works only for software, data, ML & QA roles.";
 
 function toStrArray(val: unknown): string[] {
   if (!Array.isArray(val)) return [];
@@ -88,6 +96,7 @@ async function runParseModel(text: string, modelName: string): Promise<ParsedJD>
     yoe_required: String(parsed.yoe_required ?? ""),
     employment_type: String(parsed.employment_type ?? ""),
     ml_mode: coerceMlMode(parsed.ml_mode),
+    in_scope: typeof parsed.in_scope === "boolean" ? parsed.in_scope : true,
   };
 }
 

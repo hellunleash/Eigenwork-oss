@@ -24,7 +24,7 @@ export function Hero({ onCta }: { onCta: () => void }) {
         {/* Left — copy */}
         <div>
           <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.03] px-3 py-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-            <HashGlyph className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Built for technical hiring
+            <HashGlyph className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Built for software, data, ML & QA roles
           </span>
 
           <h1 className="mt-6 text-4xl md:text-6xl font-medium tracking-[-0.04em] leading-[1.0] text-zinc-900 dark:text-zinc-100">

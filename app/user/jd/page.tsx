@@ -49,7 +49,7 @@ export default function JDInputPage() {
         localStorage.setItem("parsedJD", JSON.stringify(data.data));
         window.location.href = "/user/jd/confirm";
       } else {
-        alert("Could not parse the Job Description. Try again.");
+        alert(data.message || "Could not parse the Job Description. Try again.");
       }
     } catch {
       alert("Error connecting to server.");

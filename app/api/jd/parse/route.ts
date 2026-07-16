@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseJdText } from "@/lib/jd-parse";
+import { parseJdText, UNSUPPORTED_ROLE_MESSAGE } from "@/lib/jd-parse";
 import { requireFirebaseUser } from "@/lib/auth-server";
 import { allowRequest } from "@/lib/rate-limit";
 import { getRequestId, log, timeMs } from "@/lib/server-logger";
@@ -54,6 +54,10 @@ export async function POST(req: Request) {
 
     const t = timeMs();
     const parsed = await parseJdText(jd, { requestId, route, userId: auth.userId });
+    if (!parsed.in_scope) {
+      log("info", "jd.parse_unsupported_role", { requestId, route, userId: auth.userId, role_category: parsed.role_category });
+      return NextResponse.json({ error: "unsupported_role", message: UNSUPPORTED_ROLE_MESSAGE }, { status: 422 });
+    }
     log("info", "jd.parse_ok", { requestId, route, userId: auth.userId, latencyMs: t() });
     return NextResponse.json({ success: true, data: parsed });
   } catch (err) {

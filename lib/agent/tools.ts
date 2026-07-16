@@ -26,6 +26,7 @@ import {
   askForJd,
   buildShareMessage,
   intakeLink,
+  UNSUPPORTED_ROLE_MESSAGE,
   type IntakeDraft,
 } from "@/lib/agent/intake";
 import { workAuthChoiceToBooleans, type WorkAuthChoice } from "@/lib/jd-options";
@@ -512,6 +513,10 @@ async function proposeCreateIntake(args: Record<string, unknown>, ctx: ToolCtx):
     submission_cap: cap,
     share_note: shareNote,
   });
+
+  // Scope gate: reject roles outside software/data/ML/QA BEFORE proposing anything —
+  // no confirm card, no role created.
+  if (!draft.in_scope) return { error: UNSUPPORTED_ROLE_MESSAGE };
 
   // Still missing a required pick → tell the model exactly what to ask (with the
   // numbered options). The model relays it; nothing is minted.

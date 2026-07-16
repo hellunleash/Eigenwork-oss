@@ -29,6 +29,7 @@ import {
   finalizeIntake,
   CONFIRM_FOOTER,
   GAP_ORDER,
+  UNSUPPORTED_ROLE_MESSAGE,
   type IntakeDraft,
   type IntakeFields,
   type Gap,
@@ -366,6 +367,8 @@ async function proposeIntake(
   // No JD/role given (just "create a link") → ask for it instead of inventing one.
   if (!hasRoleContent(intake.title, params.text)) return askForJd();
   const draft = await buildIntakeDraft(intake, params);
+  // Scope gate: reject roles outside software/data/ML/QA BEFORE proposing anything.
+  if (!draft.in_scope) return UNSUPPORTED_ROLE_MESSAGE;
   if (!params.convoKey) {
     // No conversation to hold a draft (e.g. a non-Slack caller) — mint directly.
     return finalizeIntake(orgId, userId, draft, auditOf(params));
