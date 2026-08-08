@@ -7,6 +7,12 @@ import { moveStage, STAGES, OUTCOMES, type Stage, type Outcome } from "@/lib/sta
 import { runMatch } from "@/lib/match";
 import { asDraft, finalizeIntake } from "@/lib/agent/intake";
 import { logAgentRun } from "@/lib/agent/audit";
+import { interviewsEnabled } from "@/lib/interview/flags";
+import { inviteToScreen } from "@/lib/interview/screen-orchestrate";
+import { inviteToTakeHome } from "@/lib/interview/takehome-orchestrate";
+import { inviteToSystemDesign } from "@/lib/interview/systemdesign-orchestrate";
+import { resolveOwnedCandidate } from "@/lib/interview/candidate-access";
+import { interviewLink, ROUND_LABEL, isInterviewRoundKey } from "@/lib/interview/links";
 import { getRequestId, log, type LogContext } from "@/lib/server-logger";
 
 /**
@@ -216,6 +222,66 @@ export async function POST(req: Request) {
         // create_intake action; createJd re-checks the active-role limit (T1/T3).
         const out = await finalizeIntake(actor.orgId, actor.userId, draft, { teamId, channel, slackUserId });
         await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: out, blocks: [] });
+        return;
+      }
+
+      // --- Phase-2 interview invite confirm (flag-gated) ----------------------
+
+      if (action.action_id === "interview_invite_cancel") {
+        await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "Cancelled — no invite sent.", blocks: [] });
+        return;
+      }
+
+      if (action.action_id === "interview_invite_confirm") {
+        if (!interviewsEnabled()) {
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "Interviews aren't enabled for your workspace yet.", blocks: [] });
+          return;
+        }
+        let parsed: { candidateId?: unknown; round?: unknown } = {};
+        try {
+          parsed = JSON.parse(action.value ?? "{}");
+        } catch {
+          /* invalid below */
+        }
+        const candidateId = typeof parsed.candidateId === "string" ? parsed.candidateId : "";
+        const round = parsed.round;
+        if (!candidateId || !isInterviewRoundKey(round)) {
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: "That action expired or was invalid — ask me again.", blocks: [] });
+          return;
+        }
+        // Each inviteTo* re-checks org ownership from the RESOLVED actor (candidate → jd
+        // → org) and meters one interview credit per candidate — never the payload.
+        const invite = round === "screen" ? inviteToScreen : round === "takeHome" ? inviteToTakeHome : inviteToSystemDesign;
+        const res = await invite(actor.orgId, candidateId);
+        if (!res.ok) {
+          const msg =
+            res.status === 402
+              ? "You're out of interview credits — top up to invite candidates to interviews."
+              : res.status === 400
+                ? "That round is turned off for this role."
+                : "I couldn't set up that interview just now — please try again.";
+          await slackUpdateMessage(installation.botToken, { channel, ts: messageTs, text: msg, blocks: [] });
+          return;
+        }
+        const owned = await resolveOwnedCandidate(actor.orgId, candidateId);
+        const token = "error" in owned ? "" : typeof owned.candidate.accessToken === "string" ? owned.candidate.accessToken : "";
+        const name = "error" in owned || typeof owned.candidate.candidateName !== "string" ? "The candidate" : owned.candidate.candidateName;
+        void logAgentRun({
+          orgId: actor.orgId,
+          userId: actor.userId,
+          surface: "slack",
+          kind: "action",
+          teamId,
+          channel,
+          slackUserId,
+          detail: { action: "invite_to_interview", candidateId, round },
+        });
+        await slackUpdateMessage(installation.botToken, {
+          channel,
+          ts: messageTs,
+          text: `✅ ${name} is invited to the *${ROUND_LABEL[round]}*. Send them this link:\n${interviewLink(candidateId, round, token)}`,
+          blocks: [],
+        });
         return;
       }
     } catch (err) {

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 const PRICE_SINGLE_ROLE = process.env.PADDLE_PRICE_SINGLE_ROLE ?? "";
 const PRICE_TEAM = process.env.PADDLE_PRICE_TEAM ?? "";
 const PRICE_WALLET = process.env.PADDLE_PRICE_WALLET ?? "";
+const PRICE_INTERVIEW = process.env.PADDLE_PRICE_INTERVIEW ?? "";
 
 /**
  * GET /api/paddle/config
@@ -18,6 +19,7 @@ export async function GET() {
       single_role: PRICE_SINGLE_ROLE || null,
       team: PRICE_TEAM || null,
       wallet_topup: PRICE_WALLET || null,
+      interview_credits: PRICE_INTERVIEW || null,
     },
   });
 }

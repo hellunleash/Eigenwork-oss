@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { markPaddleTransactionProcessed, makeOpId } from "@/lib/credit-ledger";
 import { grantPass, creditWallet } from "@/lib/entitlements";
 import { WALLET_MIN_QTY, WALLET_MAX_QTY } from "@/lib/wallet-config";
+import { creditInterviewCredits, INTERVIEW_CREDIT_MIN_QTY, INTERVIEW_CREDIT_MAX_QTY } from "@/lib/interview/interview-credits";
 import { getRequestId, log } from "@/lib/server-logger";
 
 export const runtime = "nodejs";
@@ -10,6 +11,27 @@ export const dynamic = "force-dynamic";
 
 const PADDLE_WEBHOOK_SECRET = process.env.PADDLE_WEBHOOK_SECRET ?? "";
 const SIGNATURE_TOLERANCE_SECONDS = 60 * 5; // 5 minutes per Paddle docs
+
+// The Paddle Price id we EXPECT for each `kind`. `customData.kind` is set by our own
+// checkout but is client-controllable, so on its own it lets a buyer pay the cheapest
+// price yet tag the purchase as a richer `kind`. Cross-checking the ACTUALLY-paid
+// price id (which the signed transaction carries) against the configured price closes
+// that. Enforced per-kind only when that kind's price env is set (so unconfigured kinds
+// are unaffected) AND the payload carried price ids (a real Paddle purchase always does;
+// the event is HMAC-signed, so an attacker can't strip them).
+const EXPECTED_PRICE: Record<string, string> = {
+  single_role: process.env.PADDLE_PRICE_SINGLE_ROLE ?? "",
+  team: process.env.PADDLE_PRICE_TEAM ?? "",
+  wallet_topup: process.env.PADDLE_PRICE_WALLET ?? "",
+  interview_credits: process.env.PADDLE_PRICE_INTERVIEW ?? "",
+};
+
+function priceIdMatchesKind(kind: string, paidPriceIds: Set<string>): boolean {
+  const expected = EXPECTED_PRICE[kind];
+  if (!expected) return true; // price not configured for this kind → can't verify, don't block
+  if (paidPriceIds.size === 0) return true; // no price data in the (signed) payload → fail-open
+  return paidPriceIds.has(expected);
+}
 
 /**
  * POST /api/paddle/webhook
@@ -66,7 +88,7 @@ export async function POST(req: Request) {
     const orgId = typeof rawOrgId === "string" ? rawOrgId : undefined;
     const rawKind = (customData as { kind?: unknown } | null | undefined)?.kind;
     const kind =
-      rawKind === "single_role" || rawKind === "team" || rawKind === "wallet_topup"
+      rawKind === "single_role" || rawKind === "team" || rawKind === "wallet_topup" || rawKind === "interview_credits"
         ? rawKind
         : undefined;
 
@@ -94,6 +116,17 @@ export async function POST(req: Request) {
       quantity = Number(maybeQuantityField) || 0;
     }
 
+    // The price ids actually paid (for the kind cross-check below).
+    const paidPriceIds = new Set<string>();
+    for (const collection of possibleItemCollections) {
+      if (Array.isArray(collection)) {
+        for (const item of collection) {
+          const pid = (item as { price?: { id?: unknown } })?.price?.id;
+          if (typeof pid === "string" && pid) paidPriceIds.add(pid);
+        }
+      }
+    }
+
     if (orgId && kind) {
       try {
         // Idempotency: dedupe on the Paddle transaction id. grantPass/creditWallet
@@ -105,6 +138,21 @@ export async function POST(req: Request) {
             log("info", "paddle.webhook_duplicate_ignored", { requestId, route, opId, orgId, txnId });
             return NextResponse.json({ success: true });
           }
+        }
+        // Defense vs a spoofed customData.kind: refuse to grant if the actually-paid
+        // price doesn't match the claimed kind. (Enforced only for kinds with a
+        // configured price env + a payload that carried price ids.)
+        if (!priceIdMatchesKind(kind, paidPriceIds)) {
+          log("error", "paddle.price_id_kind_mismatch", {
+            requestId,
+            route,
+            orgId,
+            kind,
+            txnId,
+            expected: EXPECTED_PRICE[kind],
+            paid: [...paidPriceIds],
+          });
+          return NextResponse.json({ success: true });
         }
         if (kind === "wallet_topup") {
           // Variable-quantity wallet top-up: quantity = number of screens.
@@ -133,6 +181,30 @@ export async function POST(req: Request) {
           await creditWallet({
             orgId,
             screens: quantity,
+            opId,
+            metadata: { txnId: txnId ?? null, eventType, quantity },
+          });
+        } else if (kind === "interview_credits") {
+          // Phase-2 per-candidate interview credits — a SEPARATE balance from the
+          // screen wallet (never draws down screensRemaining). Same bounds discipline
+          // as wallet_topup: a quantity out of range means a Paddle bug or a bypass —
+          // refuse to credit and log for manual review (the txnId is already recorded,
+          // so Paddle won't retry).
+          if (quantity < INTERVIEW_CREDIT_MIN_QTY || quantity > INTERVIEW_CREDIT_MAX_QTY) {
+            log("error", "paddle.interview_credit_quantity_out_of_range", {
+              requestId,
+              route,
+              orgId,
+              txnId,
+              quantity,
+              min: INTERVIEW_CREDIT_MIN_QTY,
+              max: INTERVIEW_CREDIT_MAX_QTY,
+            });
+            return NextResponse.json({ success: true });
+          }
+          await creditInterviewCredits({
+            orgId,
+            credits: quantity,
             opId,
             metadata: { txnId: txnId ?? null, eventType, quantity },
           });

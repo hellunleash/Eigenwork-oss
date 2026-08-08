@@ -31,6 +31,10 @@ import {
 } from "@/lib/agent/intake";
 import { workAuthChoiceToBooleans, type WorkAuthChoice } from "@/lib/jd-options";
 import type { AgentReply, AuditMeta } from "@/lib/agent/types";
+import { interviewsEnabled } from "@/lib/interview/flags";
+import { resolveOwnedCandidate } from "@/lib/interview/candidate-access";
+import { compileFinalistReport } from "@/lib/interview/report";
+import { ROUND_LABEL, isInterviewRoundKey } from "@/lib/interview/links";
 
 /**
  * Tool catalogue for the ADR-012 bounded tool-calling loop.
@@ -48,8 +52,8 @@ import type { AgentReply, AuditMeta } from "@/lib/agent/types";
  * validated against the caller's own roster) — T3/T4.
  */
 
-export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate", "export_candidates", "send_resume", "share_message"] as const;
-export const WRITE_TOOLS = ["run_match", "create_intake", "move_stage", "draft_outreach"] as const;
+export const READ_TOOLS = ["list_roles", "find_candidates", "get_candidate", "export_candidates", "send_resume", "share_message", "interview_status"] as const;
+export const WRITE_TOOLS = ["run_match", "create_intake", "move_stage", "draft_outreach", "invite_to_interview"] as const;
 export type ToolName = (typeof READ_TOOLS)[number] | (typeof WRITE_TOOLS)[number];
 
 export function isWriteTool(name: string): boolean {
@@ -229,6 +233,37 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   },
 ];
 
+/**
+ * Phase-2 interview tools — declared to the model ONLY when PHASE2_INTERVIEWS_ENABLED
+ * is on (the tool-loop appends these to TOOL_DECLARATIONS behind the flag), so the bot
+ * is dark to them in prod. Both dispatch/propose paths also re-check the flag.
+ */
+export const INTERVIEW_TOOL_DECLARATIONS: FunctionDeclaration[] = [
+  {
+    name: "interview_status",
+    description:
+      "Get a candidate's AI-interview progress + finalist recommendation — the screen / take-home / system-design scores, the suggested call (advance / hold / pass), and what to probe in the final. Use when the recruiter asks how a candidate did in interviews or for their finalist report. candidateId must come from a shortlist / prior turn.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { candidateId: { type: SchemaType.STRING, description: "Candidate id from a shortlist." } },
+      required: ["candidateId"],
+    },
+  },
+  {
+    name: "invite_to_interview",
+    description:
+      "Invite a candidate to ONE AI interview round: the technical screen, the take-home, or the system-design exercise. Proposes a confirm button; nothing is sent until the recruiter confirms, and on confirm it returns the candidate's tokenized link to share. The whole interview loop costs ONE interview credit per candidate. candidateId must come from a shortlist / prior turn.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        candidateId: { type: SchemaType.STRING, description: "Candidate id from a shortlist." },
+        round: { type: SchemaType.STRING, format: "enum", enum: ["screen", "takeHome", "systemDesign"], description: "Which round to invite them to." },
+      },
+      required: ["candidateId", "round"],
+    },
+  },
+];
+
 // --- Read dispatch ------------------------------------------------------------
 
 export async function dispatchRead(name: string, args: Record<string, unknown>, ctx: ToolCtx): Promise<ReadResult> {
@@ -245,9 +280,38 @@ export async function dispatchRead(name: string, args: Record<string, unknown>, 
       return readSendResume(args, ctx);
     case "share_message":
       return readShareMessage(args, ctx);
+    case "interview_status":
+      return readInterviewStatus(args, ctx);
     default:
       return { error: `Unknown read tool: ${name}` };
   }
+}
+
+/** Read a candidate's interview progress + finalist recommendation. Flag-gated. T4:
+ *  only ids on the caller's own roster are addressable; T3: resolveOwnedCandidate
+ *  re-checks the candidate → jd → org chain. Candidate-derived → fenced. */
+async function readInterviewStatus(args: Record<string, unknown>, ctx: ToolCtx): Promise<ReadResult> {
+  if (!interviewsEnabled()) return { error: "Interviews aren't enabled for your workspace yet." };
+  const id = typeof args.candidateId === "string" ? args.candidateId : "";
+  if (!ctx.roster.some((c) => c.id === id)) return { error: "I don't see that candidate in your shortlists." };
+  const owned = await resolveOwnedCandidate(ctx.orgId, id);
+  if ("error" in owned) return { error: "I couldn't load that candidate's interview status." };
+  const report = compileFinalistReport(owned.candidate, owned.jd);
+  const roundView = (sc: { overall: number; suggestedAdvance: boolean } | null | undefined) =>
+    sc ? { score: sc.overall, advance: sc.suggestedAdvance } : null;
+  return {
+    interview: {
+      candidate: report.candidateName,
+      role: report.roleTitle,
+      recommendation: report.recommendation.suggested,
+      rationale: report.recommendation.rationale,
+      screen: roundView(report.rounds.screen),
+      take_home: roundView(report.rounds.takeHome?.scorecard),
+      system_design: roundView(report.rounds.systemDesign),
+      what_to_probe: report.whatToProbe,
+    },
+    _note: FENCE_NOTE,
+  };
 }
 
 async function readListRoles(ctx: ToolCtx): Promise<ReadResult> {
@@ -424,9 +488,28 @@ export async function proposeWrite(name: string, args: Record<string, unknown>, 
       return proposeMoveStage(args, ctx);
     case "draft_outreach":
       return proposeDraftOutreach(args, ctx);
+    case "invite_to_interview":
+      return proposeInviteToInterview(args, ctx);
     default:
       return { error: `Unknown write tool: ${name}` };
   }
+}
+
+/** Propose inviting a candidate to one interview round. PROPOSE-ONLY: validates against
+ *  the caller's roster + the round enum and builds a confirm card — no Firestore, no
+ *  invite. The real inviteTo* mutation runs on the human's Confirm click in
+ *  /api/slack/interactivity, re-checking org ownership from the resolved actor. */
+function proposeInviteToInterview(args: Record<string, unknown>, ctx: ToolCtx): WriteResult {
+  if (!interviewsEnabled()) return { error: "Interviews aren't enabled for your workspace yet." };
+  const id = typeof args.candidateId === "string" && ctx.roster.some((c) => c.id === args.candidateId) ? args.candidateId : "";
+  if (!id) return { error: "Which candidate should I invite? Give me one from a shortlist." };
+  const round = args.round;
+  if (!isInterviewRoundKey(round)) {
+    return { error: "Which round — the technical screen, the take-home, or the system design exercise?" };
+  }
+  const name = ctx.roster.find((c) => c.id === id)?.name ?? "the candidate";
+  const prompt = `Invite *${name}* to the *${ROUND_LABEL[round]}*? I'll generate it and give you their link to share. (Uses one interview credit for this candidate — the whole loop is one credit.)`;
+  return { proposal: confirmCard(prompt, "interview_invite_confirm", "interview_invite_cancel", JSON.stringify({ candidateId: id, round })) };
 }
 
 /** Build a Block Kit confirm card with a primary Confirm + a Cancel button. The

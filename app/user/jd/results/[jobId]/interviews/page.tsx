@@ -27,6 +27,20 @@ import { PreviewSidebar } from "@/app/user/PreviewSidebar";
 type Stage = "screening" | "interviewing" | "offer" | "hired" | "rejected" | "withdrawn";
 type Outcome = "cleared" | "failed" | "pending";
 
+// Phase-2 (AI interviews) round progress — present on the payload ONLY when
+// PHASE2_INTERVIEWS_ENABLED is on server-side; absent → none of the rounds UI
+// renders and this page is exactly the ADR-009 surface it was.
+type RoundBrief = { status: string; overall: number | null; suggestedAdvance: boolean | null };
+type InterviewBrief = {
+  planned: string[];
+  rounds: {
+    introCall: { status: string; note: string | null } | null;
+    screen: RoundBrief | null;
+    takeHome: RoundBrief | null;
+    systemDesign: RoundBrief | null;
+  };
+};
+
 type InterviewCandidate = {
   id: string;
   name: string;
@@ -38,6 +52,7 @@ type InterviewCandidate = {
   selectedForInterview?: boolean;
   offerExtendedAt?: number | null;
   hiredAt?: number | null;
+  interview?: InterviewBrief;
 };
 
 type InterviewsResponse = {
@@ -46,6 +61,7 @@ type InterviewsResponse = {
   seniority: string;
   hasShortlist: boolean;
   createdAt: number | null;
+  interviewCredits?: number;
   candidates: InterviewCandidate[];
 };
 
@@ -70,6 +86,78 @@ function etiTone(score: number | null): string {
   return "text-amber-600 dark:text-amber-400";
 }
 
+// --- Phase-2 rounds UI helpers -----------------------------------------------
+
+const ROUND_LABELS: Record<string, string> = {
+  introCall: "Intro call",
+  screen: "Technical screen",
+  takeHome: "Take-home",
+  systemDesign: "System design",
+};
+
+type RoundTone = "gray" | "sky" | "amber" | "emerald" | "rose";
+
+// Color never the only signal: every tone is paired with a status label in the panel
+// and a title/aria-label on the strip segments.
+const TONE: Record<RoundTone, { seg: string; dot: string }> = {
+  gray: { seg: "bg-gray-200 dark:bg-white/[0.1]", dot: "bg-gray-300 dark:bg-gray-600" },
+  sky: { seg: "bg-sky-400 dark:bg-sky-500", dot: "bg-sky-500" },
+  amber: { seg: "bg-amber-400 dark:bg-amber-500", dot: "bg-amber-500" },
+  emerald: { seg: "bg-emerald-500", dot: "bg-emerald-500" },
+  rose: { seg: "bg-rose-500", dot: "bg-rose-500" },
+};
+
+type RoundState = {
+  key: string;
+  label: string;
+  status: string;
+  statusText: string;
+  tone: RoundTone;
+  overall: number | null;
+  advance: boolean | null;
+  complete: boolean;
+};
+
+function roundState(key: string, iv: InterviewBrief): RoundState {
+  const label = ROUND_LABELS[key] ?? key;
+  if (key === "introCall") {
+    const st = iv.rounds.introCall?.status ?? "not_started";
+    const done = st === "passed" || st === "scored";
+    return {
+      key, label, status: st,
+      statusText: done ? "Done" : "Not held yet",
+      tone: done ? "emerald" : "gray",
+      overall: null, advance: null, complete: done,
+    };
+  }
+  const b = key === "screen" || key === "takeHome" || key === "systemDesign" ? iv.rounds[key] : null;
+  const st = b?.status ?? "not_started";
+  const advance = b?.suggestedAdvance ?? null;
+  const map: Record<string, { text: string; tone: RoundTone }> = {
+    not_started: { text: "Not started", tone: "gray" },
+    invited: { text: "Invited — awaiting the candidate", tone: "sky" },
+    in_progress: { text: "In progress", tone: "sky" },
+    submitted: { text: "Submitted", tone: "amber" },
+    scored: { text: "Scored", tone: advance === false ? "rose" : "emerald" },
+    passed: { text: "Passed", tone: "emerald" },
+    failed: { text: "Failed", tone: "rose" },
+  };
+  const m = map[st] ?? { text: st, tone: "gray" as RoundTone };
+  return {
+    key, label, status: st, statusText: m.text, tone: m.tone,
+    overall: b?.overall ?? null, advance,
+    complete: st === "scored" || st === "passed" || st === "failed",
+  };
+}
+
+function inviteErrorMessage(httpStatus: number, code: string): string {
+  if (httpStatus === 402) return "You're out of interview credits — top up to invite candidates to interviews.";
+  if (code === "round_disabled") return "That round is turned off for this role.";
+  if (code === "candidate_not_active") return "This candidate is no longer active in the pipeline.";
+  if (code === "generation_failed") return "Couldn't generate this round just now — please try again.";
+  return "Couldn't set up the invite — please try again.";
+}
+
 export default function InterviewPipelinePage() {
   usePageTitle("Interview pipeline");
   const router = useRouter();
@@ -81,6 +169,12 @@ export default function InterviewPipelinePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState<Set<string>>(new Set());
   const [drafting, setDrafting] = useState<Set<string>>(new Set());
+  // Phase-2 rounds UI state (only reachable when the API returned `interview` data).
+  const [openRounds, setOpenRounds] = useState<Set<string>>(new Set());
+  const [inviteBusy, setInviteBusy] = useState<string | null>(null); // `${candidateId}:${round}`
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [introBusy, setIntroBusy] = useState<Set<string>>(new Set());
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -213,6 +307,64 @@ export default function InterviewPipelinePage() {
     }
   };
 
+  // Invite a candidate to an app-run round (web peer of Slack's invite confirm) and
+  // copy their tokenized link. Idempotent server-side: re-posting an already-invited
+  // round returns the same link with no regeneration and no recharge, so the same
+  // handler powers both "Invite" and "Copy link".
+  const inviteRound = async (id: string, round: string) => {
+    const key = `${id}:${round}`;
+    setInviteBusy(key);
+    try {
+      const token = await getIdTokenOrNull();
+      const res = await fetch(`/api/interview/invite/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ round }),
+      });
+      const out = (await res.json().catch(() => ({}))) as { link?: string; error?: string };
+      if (!res.ok || !out.link) {
+        if (typeof window !== "undefined") window.alert(inviteErrorMessage(res.status, out.error ?? ""));
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(out.link);
+        setCopiedKey(key);
+        window.setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 2500);
+      } catch {
+        // Clipboard blocked (permissions/insecure context) — hand the link over manually.
+        if (typeof window !== "undefined") window.prompt("Copy the candidate's interview link:", out.link);
+      }
+      await mutate();
+    } finally {
+      setInviteBusy(null);
+    }
+  };
+
+  // Stage-2b intro-call bookkeeping: mark done/undo + save the note.
+  const patchIntroCall = async (id: string, patch: { done?: boolean; note?: string }) => {
+    setIntroBusy((s) => new Set(s).add(id));
+    try {
+      const token = await getIdTokenOrNull();
+      const res = await fetch(`/api/interview/introcall/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error("intro_call_failed");
+      await mutate();
+      if (patch.note !== undefined) {
+        setNoteDrafts((d) => { const n = { ...d }; delete n[id]; return n; });
+      }
+    } catch {
+      if (typeof window !== "undefined") window.alert("Couldn't update the intro call — please try again.");
+    } finally {
+      setIntroBusy((s) => { const n = new Set(s); n.delete(id); return n; });
+    }
+  };
+
+  const toggleRounds = (id: string) =>
+    setOpenRounds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
   if (authChecking) return <div className="min-h-screen bg-white dark:bg-[#0a0a0a]" />;
 
   const title = data?.title?.trim() || "this role";
@@ -291,7 +443,8 @@ export default function InterviewPipelinePage() {
                 </div>
                 <ul className="divide-y divide-gray-100 dark:divide-white/[0.05]">
                   {g.rows.map((c) => (
-                    <li key={c.id} className={`px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 ${saving.has(c.id) ? "opacity-60 pointer-events-none" : ""}`}>
+                    <li key={c.id} className={`px-5 py-3.5 ${saving.has(c.id) ? "opacity-60 pointer-events-none" : ""}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="shrink-0 inline-flex items-center justify-center min-w-[2rem] h-6 px-1.5 rounded-md text-[11px] font-semibold tabular-nums bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">#{c.rank}</span>
                         <div className="min-w-0">
@@ -311,6 +464,13 @@ export default function InterviewPipelinePage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
+                        {c.interview && (
+                          <RoundStripButton
+                            iv={c.interview}
+                            open={openRounds.has(c.id)}
+                            onToggle={() => toggleRounds(c.id)}
+                          />
+                        )}
                         {c.stage === "interviewing" && (
                           <>
                             <ActBtn tone="primary" label="Passed → extend offer" onClick={() => move(c.id, "offer", "cleared")} />
@@ -345,6 +505,21 @@ export default function InterviewPipelinePage() {
                           Notes
                         </button>
                       </div>
+                      </div>
+                      {c.interview && openRounds.has(c.id) && (
+                        <RoundsPanel
+                          candId={c.id}
+                          iv={c.interview}
+                          inviteBusy={inviteBusy}
+                          copiedKey={copiedKey}
+                          introBusy={introBusy.has(c.id)}
+                          noteDraft={noteDrafts[c.id]}
+                          onInvite={(round) => inviteRound(c.id, round)}
+                          onIntro={(done) => patchIntroCall(c.id, { done })}
+                          onNoteDraft={(v) => setNoteDrafts((d) => ({ ...d, [c.id]: v }))}
+                          onNoteSave={() => patchIntroCall(c.id, { note: noteDrafts[c.id] ?? "" })}
+                        />
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -381,9 +556,23 @@ export default function InterviewPipelinePage() {
           </nav>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">Interview pipeline</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">{title}{seniority ? ` · ${seniority}` : ""}</p>
-          <div className="mt-3 inline-flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-white/[0.04] rounded-lg">
-            <a href={`/user/jd/results?jobId=${encodeURIComponent(jobId)}`} className="px-3 py-1 rounded-md text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Shortlist</a>
-            <span className="px-3 py-1 rounded-md text-xs font-medium bg-white dark:bg-white/[0.08] text-gray-900 dark:text-gray-100 shadow-sm">Interview pipeline</span>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-white/[0.04] rounded-lg">
+              <a href={`/user/jd/results?jobId=${encodeURIComponent(jobId)}`} className="px-3 py-1 rounded-md text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Shortlist</a>
+              <span className="px-3 py-1 rounded-md text-xs font-medium bg-white dark:bg-white/[0.08] text-gray-900 dark:text-gray-100 shadow-sm">Interview pipeline</span>
+            </div>
+            {typeof data?.interviewCredits === "number" && (
+              <span
+                title="Charged once per candidate, at their first round invite — later rounds are free."
+                className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium tabular-nums ${
+                  data.interviewCredits === 0
+                    ? "bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    : "bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {data.interviewCredits} interview credit{data.interviewCredits === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -393,16 +582,137 @@ export default function InterviewPipelinePage() {
   );
 }
 
-function ActBtn({ label, tone, onClick }: { label: string; tone: "primary" | "muted" | "danger"; onClick: () => void }) {
+function ActBtn({ label, tone, onClick, disabled, title }: { label: string; tone: "primary" | "muted" | "danger"; onClick: () => void; disabled?: boolean; title?: string }) {
   const cls = {
     primary: "text-white dark:text-gray-900 bg-gray-900 dark:bg-gray-100 hover:bg-gray-800 dark:hover:bg-gray-200",
     muted: "text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-white/[0.1] hover:bg-gray-50 dark:hover:bg-gray-800",
     danger: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/15 hover:bg-rose-100 dark:hover:bg-rose-500/25",
   }[tone];
   return (
-    <button type="button" onClick={onClick} className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${cls}`}>
+    <button type="button" onClick={onClick} disabled={disabled} title={title} className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none ${cls}`}>
       {label}
     </button>
+  );
+}
+
+// --- Phase-2 rounds UI (renders only when the API returned `interview` data) ----
+
+/** Compact per-candidate progress strip: one segment per planned round + n/N count.
+ *  Click to expand the rounds panel. Segments carry title/aria labels (color is
+ *  never the only signal). */
+function RoundStripButton({ iv, open, onToggle }: { iv: InterviewBrief; open: boolean; onToggle: () => void }) {
+  const states = iv.planned.map((k) => roundState(k, iv));
+  const done = states.filter((s) => s.complete).length;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      title={`Interview rounds — ${done} of ${states.length} complete`}
+      className="flex items-center gap-2 px-2.5 py-1 rounded-md hover:bg-gray-100 dark:hover:bg-white/[0.06] transition-colors"
+    >
+      <span className="flex items-center gap-[3px]" aria-hidden="true">
+        {states.map((s) => (
+          <span key={s.key} title={`${s.label}: ${s.statusText}`} className={`h-1.5 w-4 rounded-full ${TONE[s.tone].seg}`} />
+        ))}
+      </span>
+      <span className="text-xs font-medium text-gray-500 dark:text-gray-400 tabular-nums">{done}/{states.length}</span>
+      <svg
+        className={`w-3 h-3 text-gray-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </button>
+  );
+}
+
+/** Expanded rounds panel: one row per planned round with status, score, and the
+ *  action for that round — intro-call bookkeeping (done + note), invite/copy-link
+ *  for the app-run rounds — plus the finalist-report link. */
+function RoundsPanel({
+  candId, iv, inviteBusy, copiedKey, introBusy, noteDraft,
+  onInvite, onIntro, onNoteDraft, onNoteSave,
+}: {
+  candId: string;
+  iv: InterviewBrief;
+  inviteBusy: string | null;
+  copiedKey: string | null;
+  introBusy: boolean;
+  noteDraft: string | undefined;
+  onInvite: (round: string) => void;
+  onIntro: (done: boolean) => void;
+  onNoteDraft: (v: string) => void;
+  onNoteSave: () => void;
+}) {
+  const existingNote = iv.rounds.introCall?.note ?? "";
+  const noteValue = noteDraft ?? existingNote;
+  const noteDirty = noteDraft !== undefined && noteDraft !== existingNote;
+
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200/80 dark:border-white/[0.06] bg-gray-50/60 dark:bg-white/[0.02] divide-y divide-gray-100 dark:divide-white/[0.05]">
+      {iv.planned.map((k) => {
+        const s = roundState(k, iv);
+        const busyKey = `${candId}:${k}`;
+        const busy = inviteBusy === busyKey;
+        const copied = copiedKey === busyKey;
+        return (
+          <div key={k} className="px-4 py-2.5 flex flex-wrap items-center gap-3">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${TONE[s.tone].dot}`} aria-hidden="true" />
+            <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <p className="text-xs font-medium text-gray-900 dark:text-gray-100">{s.label}</p>
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">{s.statusText}</span>
+              {s.overall != null && (
+                <span className={`text-[11px] font-semibold tabular-nums ${s.advance === false ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                  {s.overall}/100{s.advance != null ? (s.advance ? " · advance ✓" : " · below bar") : ""}
+                </span>
+              )}
+            </div>
+            {k === "introCall" ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <input
+                  type="text"
+                  value={noteValue}
+                  onChange={(e) => onNoteDraft(e.target.value)}
+                  placeholder="Add a note…"
+                  maxLength={500}
+                  className="w-36 sm:w-52 px-2 py-1 rounded-md text-xs bg-white dark:bg-white/[0.04] border border-gray-200 dark:border-white/[0.1] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-sky-400"
+                  aria-label="Intro-call note"
+                />
+                {noteDirty && <ActBtn tone="muted" label={introBusy ? "Saving…" : "Save note"} onClick={onNoteSave} disabled={introBusy} />}
+                {s.complete
+                  ? <ActBtn tone="muted" label="Undo" onClick={() => onIntro(false)} disabled={introBusy} />
+                  : <ActBtn tone="primary" label={introBusy ? "Saving…" : "Mark done"} onClick={() => onIntro(true)} disabled={introBusy} />}
+              </div>
+            ) : s.status === "not_started" ? (
+              <ActBtn
+                tone="primary"
+                label={busy ? "Generating…" : "Invite · copy link"}
+                onClick={() => onInvite(k)}
+                disabled={busy}
+                title="Generates this round and copies the candidate's link. A candidate's first round uses 1 interview credit; later rounds are free."
+              />
+            ) : s.status === "invited" || s.status === "in_progress" ? (
+              <ActBtn
+                tone="muted"
+                label={busy ? "Copying…" : copied ? "Copied ✓" : "Copy link"}
+                onClick={() => onInvite(k)}
+                disabled={busy}
+              />
+            ) : null}
+          </div>
+        );
+      })}
+      <div className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] text-gray-500 dark:text-gray-400">Scores are recommendations — advancing stays your call.</p>
+        <a
+          href={`/user/interview/report/${encodeURIComponent(candId)}`}
+          className="text-xs font-medium text-sky-700 dark:text-sky-300 hover:underline"
+        >
+          View finalist report →
+        </a>
+      </div>
+    </div>
   );
 }
 

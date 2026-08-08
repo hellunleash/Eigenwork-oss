@@ -67,7 +67,7 @@ function argVal(flag: string): string | undefined {
   return i !== -1 ? process.argv[i + 1] : undefined;
 }
 
-type Kind = "single_role" | "team" | "wallet_topup";
+type Kind = "single_role" | "team" | "wallet_topup" | "interview_credits";
 
 function buildSignedRequest(
   secret: string,
@@ -85,7 +85,8 @@ let pass = 0;
 let fail = 0;
 function check(label: string, ok: boolean, detail: string): void {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${label} — ${detail}`);
-  ok ? pass++ : fail++;
+  if (ok) pass++;
+  else fail++;
 }
 
 async function main(): Promise<void> {
@@ -114,16 +115,23 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  async function deliver(kind: Kind, quantity: number, txnId: string, tamper = false): Promise<number> {
+  async function deliver(
+    kind: Kind,
+    quantity: number,
+    txnId: string,
+    opts: { tamper?: boolean; priceId?: string } = {}
+  ): Promise<number> {
+    const item: Record<string, unknown> = { quantity };
+    if (opts.priceId) item.price = { id: opts.priceId };
     const body = {
       event_type: "transaction.completed",
       data: {
         id: txnId,
         custom_data: { orgId, kind },
-        items: [{ quantity }],
+        items: [item],
       },
     };
-    const { rawBody, signature } = buildSignedRequest(secret!, body, { tamper });
+    const { rawBody, signature } = buildSignedRequest(secret!, body, { tamper: opts.tamper });
     const res = await fetch(webhookUrl, {
       method: "POST",
       body: rawBody,
@@ -178,12 +186,42 @@ async function main(): Promise<void> {
 
   // 6. Bad signature must be rejected and credit nothing.
   const balBeforeBad = s.walletBalance;
-  status = await deliver("wallet_topup", topUp, `txn_badsig_${runId}`, /* tamper */ true);
+  status = await deliver("wallet_topup", topUp, `txn_badsig_${runId}`, { tamper: true });
   s = await summary();
   check("bad signature rejected (401, no credit)", status === 401 && s.walletBalance === balBeforeBad,
     `http=${status} (expected 401) walletBalance stayed ${s.walletBalance}`);
 
+  // 7. interview_credits — a SEPARATE balance that must NOT touch the screen wallet.
+  //    Paid price id must match PADDLE_PRICE_INTERVIEW (dev value = pri_test_interview).
+  const IC_PRICE = "pri_test_interview";
+  const { interviewCreditsRemaining, INTERVIEW_CREDIT_MAX_QTY } = await import("@/lib/interview/interview-credits");
+  const icBefore = await interviewCreditsRemaining(orgId);
+  const screensBeforeIc = (await summary()).screensRemaining;
+  const icQty = 10;
+  status = await deliver("interview_credits", icQty, `txn_ic_${runId}`, { priceId: IC_PRICE });
+  const icAfter = await interviewCreditsRemaining(orgId);
+  check("interview_credits credits the SEPARATE balance", status === 200 && icAfter === icBefore + icQty,
+    `http=${status} interviewCredits ${icBefore} -> ${icAfter} (expected +${icQty})`);
+  check("interview_credits does NOT touch the screen wallet (separate balances)", (await summary()).screensRemaining === screensBeforeIc,
+    `screensRemaining stayed ${screensBeforeIc}`);
+
+  // 8. duplicate interview_credits delivery deduped.
+  status = await deliver("interview_credits", icQty, `txn_ic_${runId}`, { priceId: IC_PRICE });
+  check("duplicate interview_credits deduped (no double-credit)", (await interviewCreditsRemaining(orgId)) === icAfter,
+    `interviewCredits stayed ${await interviewCreditsRemaining(orgId)} (expected ${icAfter})`);
+
+  // 9. over-max interview_credits refused.
+  status = await deliver("interview_credits", INTERVIEW_CREDIT_MAX_QTY + 1, `txn_ic_big_${runId}`, { priceId: IC_PRICE });
+  check("over-max interview_credits refused", (await interviewCreditsRemaining(orgId)) === icAfter,
+    `qty=${INTERVIEW_CREDIT_MAX_QTY + 1}; interviewCredits stayed ${await interviewCreditsRemaining(orgId)}`);
+
+  // 10. price_id↔kind guard: paying a WRONG price but tagging kind=interview_credits is refused.
+  status = await deliver("interview_credits", icQty, `txn_ic_badprice_${runId}`, { priceId: "pri_wrong_999" });
+  check("mismatched price_id refused (customData.kind spoof blocked)", (await interviewCreditsRemaining(orgId)) === icAfter,
+    `http=${status}; interviewCredits stayed ${await interviewCreditsRemaining(orgId)} (expected ${icAfter})`);
+
   const after = await summary();
+  console.log(`\n  interview credits: ${await interviewCreditsRemaining(orgId)}`);
   console.log(`\n  end     : plan=${after.plan} walletBalance=${after.walletBalance} screensRemaining=${after.screensRemaining}`);
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
