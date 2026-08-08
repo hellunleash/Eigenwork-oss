@@ -16,8 +16,12 @@
     "qa:interview:live": "npx tsx scripts/qa-interview-screen-live.ts",
     "qa:interview:stage4": "npx tsx scripts/qa-interview-stage4-live.ts",
     "qa:interview:recruiter": "npx tsx scripts/qa-interview-recruiter-live.ts",
+    "qa:vendo:isolation": "npx tsx scripts/qa-vendo-org-isolation.ts",
+    "qa:vendo:telemetry": "npx tsx scripts/qa-vendo-telemetry-ab.ts",
     "serve": "npm run build && firebase emulators:start --only functions,hosting",
-    "deploy": "firebase deploy"
+    "deploy": "firebase deploy",
+    "predev": "vendo sync --no-ai",
+    "prebuild": "vendo sync --strict --no-ai"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.91",
