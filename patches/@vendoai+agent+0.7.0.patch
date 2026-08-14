@@ -1,0 +1,28 @@
+diff --git a/node_modules/@vendoai/agent/dist/agent.js b/node_modules/@vendoai/agent/dist/agent.js
+index b158845..ec17850 100644
+--- a/node_modules/@vendoai/agent/dist/agent.js
++++ b/node_modules/@vendoai/agent/dist/agent.js
+@@ -7,6 +7,15 @@ import { ThreadRepository } from "./threads.js";
+ import { addAgentTool, buildAgentTools } from "./tools.js";
+ import { createCapabilityMissDetector, latestUserIntent, } from "./capability-miss.js";
+ import { createToolSearchSession } from "./tool-search.js";
++// [PATCH] Host-side OTel switch. VENDO_OTEL_TRACING: unset/1/true = spans with
++// payloads; "metrics" = spans WITHOUT prompts/tool results; "0"/"false" = off.
++const __vendoOtel = (lane) => {
++  const mode = process.env.VENDO_OTEL_TRACING;
++  if (mode === "0" || mode === "false") return {};
++  const payloads = mode !== "metrics";
++  return { experimental_telemetry: { isEnabled: true, functionId: lane, recordInputs: payloads, recordOutputs: payloads } };
++};
++
+ const THREAD_ID_HEADER = "x-vendo-thread-id";
+ // AGENT-7: the default agent-loop step cap (unchanged from the previously
+ // hardcoded value); hosts raise or lower it via context.maxSteps.
+@@ -502,6 +511,7 @@ export function createAgent(config) {
+                         // AGENT-3: cancellation reaches the provider call itself; the loop
+                         // never starts another step once the signal fires.
+                         abortSignal: input.signal,
++                        ...__vendoOtel("vendo.agent.turn"),
+                     });
+                     // self-serve P: the ai-SDK `error` chunk is TRANSIENT — it sets the
+                     // client's `error` and belongs to no message, so a failed turn
