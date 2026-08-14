@@ -70,3 +70,6 @@ sales/
 
 # Job hunt — personal application materials + target lists. Keep local, never commit.
 jobhunt/
+
+# Vendo upstream watcher state — local, regenerated
+scripts/.vendo-upstream-seen
