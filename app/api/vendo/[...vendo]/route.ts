@@ -1,6 +1,7 @@
 import { nextVendoHandler } from "@vendoai/vendo/server";
 import { vendo } from "@/vendo/server";
 import { requireOrgMember } from "@/lib/org";
+import { tracedWire } from "@/lib/observability/vendo-trace";
 
 /**
  * Vendo's wire protocol — the endpoint <VendoProvider baseUrl="/api/vendo">
@@ -17,11 +18,18 @@ import { requireOrgMember } from "@/lib/org";
  * gated here, BEFORE Vendo sees it, and the resolver downgrade becomes
  * defence-in-depth rather than the only control.
  *
- * ⚠ TELEMETRY GAP (upstream, @vendoai/agent 0.7.x-0.8.0): turns served by THIS
- * handler produce no Langfuse spans — Vendo's loop calls the AI SDK without
- * `experimental_telemetry`, so the processor registered in
- * `instrumentation.ts` never sees a GenAI span, silently. Traced turns go
- * through `app/api/vendo-agent`. Measured by `npm run qa:vendo:telemetry`.
+ * TELEMETRY. Two lanes, and both are now covered:
+ *   - MODEL calls (the agent's own turns, app generation, repair) emit GenAI
+ *     spans because `patches/@vendoai+{agent,apps}` pass
+ *     `experimental_telemetry`. Upstream 0.7.x/0.8.0 does not — that omission is
+ *     runvendo/vendo#1067, and the patch is applied by a `postinstall` hook so
+ *     it survives Vercel's clean install.
+ *   - WIRE calls (a generated app calling a tool as it renders) are NOT model
+ *     calls and never appear in a GenAI span. `tracedWire` covers them, which is
+ *     the only way to see the arguments an app actually spent and the errors it
+ *     turned into confident empty states.
+ * Both honour `VENDO_OTEL_TRACING` (unset/1 = with payloads, `metrics` = without,
+ * `0` = off). Measured by `npm run qa:vendo:telemetry`.
  */
 
 const handlers = nextVendoHandler(vendo);
@@ -34,7 +42,12 @@ function gated(inner: Handler): Handler {
     if (!auth.ok) {
       return Response.json({ error: auth.error }, { status: auth.status });
     }
-    return inner(req, ctx);
+    // The span is opened INSIDE the gate so a rejected stranger never creates
+    // one, and so the actor it labels is always a resolved member.
+    return tracedWire(inner as (req: Request, ctx: never) => Promise<Response>, () => ({
+      orgId: auth.orgId,
+      userId: auth.userId,
+    }))(req, ctx as never);
   };
 }
 
