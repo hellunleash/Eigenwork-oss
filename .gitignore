@@ -56,6 +56,9 @@ coverage/
 # Claude Code local state (agent worktrees + local agent state) — not source
 .claude/
 
+# Impeccable design-tool local cache — regenerated, not source
+.impeccable/
+
 # Stray / accidental root dir (e.g. a literal "~" created by a misfired command)
 /~/
 
