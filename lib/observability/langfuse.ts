@@ -27,14 +27,29 @@ const enabled =
 let processor: LangfuseSpanProcessor | null = null;
 
 /** The singleton processor, or null when credentials are absent. */
+let constructionFailed = false;
+
 export function getLangfuseProcessor(): LangfuseSpanProcessor | null {
-  if (!enabled) return null;
+  if (!enabled || constructionFailed) return null;
   if (processor == null) {
-    processor = new LangfuseSpanProcessor({
-      publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
-      secretKey: process.env.LANGFUSE_SECRET_KEY!,
-      baseUrl: process.env.LANGFUSE_BASE_URL ?? "https://cloud.langfuse.com",
-    });
+    // The header above promised "an observability failure must NEVER break the
+    // turn it is watching" and the code did not enforce it: this constructor
+    // can throw, `register()` did not catch, and a throw inside Next's
+    // instrumentation hook fails the SERVER — every route, including ones that
+    // have nothing to do with tracing. That is exactly what happened in prod
+    // the moment the Langfuse credentials were set: /api/jd/list AND /api/kpi
+    // both 500'd. Tracing is now strictly opt-out-on-failure.
+    try {
+      processor = new LangfuseSpanProcessor({
+        publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
+        secretKey: process.env.LANGFUSE_SECRET_KEY!,
+        baseUrl: process.env.LANGFUSE_BASE_URL ?? "https://cloud.langfuse.com",
+      });
+    } catch (err) {
+      constructionFailed = true;
+      log("error", "langfuse.processor_construction_failed", {}, err);
+      return null;
+    }
   }
   return processor;
 }
