@@ -19,13 +19,10 @@ import { requireOrgMember } from "@/lib/org";
  * costs the most time: the package IS installed, it just was not deployed.
  * Local dev has a real node_modules on disk, so it only fails in production.
  *
- * Referencing the namespace (not a bare side-effect import) so no bundler can
- * tree-shake it back out. Keeping the ladder rather than passing an explicit
- * model on purpose: an explicit model pins one id and disables the
- * mini -> full escalation, which is the mechanism behind the dead-thread bug
- * we still want to reproduce.
+ * The namespace is now genuinely USED below (the Vercel branch builds a model
+ * from it), so nothing can tree-shake it out. Kept static and explicit for the
+ * same reason: resolution must never be left until runtime.
  */
-void openaiProvider.createOpenAI;
 
 /**
  * The Vendo instance for EigenWork's in-app customization surface.
@@ -51,9 +48,41 @@ void openaiProvider.createOpenAI;
  * generation lane.
  */
 
+/**
+ * On Vercel we hand Vendo a BUILT MODEL; locally we let its ladder resolve one.
+ *
+ * Vendo's ladder loads the provider by resolving a path at runtime. That cannot
+ * be made to work inside a bundled serverless function: a static import gets the
+ * package traced into the deployment, `serverExternalPackages` stops it being
+ * inlined, and it STILL failed in prod with "OPENAI_API_KEY is set but
+ * @ai-sdk/openai is not installed in this app". Both were deployed and verified
+ * against live build ids before giving up on them.
+ *
+ * An explicit model object skips resolution entirely — the provider is imported
+ * statically, right here, the ordinary way. `models.agent` takes a
+ * `string | LanguageModel`, and an explicit object is the highest-precedence
+ * tier in `resolveModels`, so nothing is left to discover at runtime.
+ *
+ * ⚠ WHY IT IS GATED ON `VERCEL` RATHER THAN APPLIED EVERYWHERE. Pinning a model
+ * disables Vendo's own mini -> full escalation, and that escalation is what
+ * produces the OpenAI Responses reasoning items behind the dead-thread bug we
+ * are still trying to reproduce. Pinning globally would silently delete the
+ * behaviour under test — which already happened once with VENDO_MODEL. So prod
+ * gets the model that works, local dev keeps the ladder that reproduces the bug.
+ */
+const onVercel = process.env.VERCEL === "1";
+const agentModelId = process.env.VENDO_MODEL?.trim() || "gpt-5";
+const paintModelId = process.env.VENDO_MODEL_PAINT?.trim() || "gpt-5-mini";
+
 export const vendo = createVendo({
   policy: "cautious",
   principal: resolvePrincipal,
+  ...(onVercel && {
+    models: {
+      agent: openaiProvider.openai(agentModelId),
+      paint: openaiProvider.openai(paintModelId),
+    },
+  }),
 });
 
 /**
