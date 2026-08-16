@@ -19,9 +19,8 @@ import { requireOrgMember } from "@/lib/org";
  * costs the most time: the package IS installed, it just was not deployed.
  * Local dev has a real node_modules on disk, so it only fails in production.
  *
- * The namespace is now genuinely USED below (the Vercel branch builds a model
- * from it), so nothing can tree-shake it out. Kept static and explicit for the
- * same reason: resolution must never be left until runtime.
+ * The import is kept because the opt-in escape hatch below builds a model from
+ * it. It is NOT the fix — it was tried, deployed and did not work.
  */
 
 /**
@@ -42,42 +41,48 @@ import { requireOrgMember } from "@/lib/org";
  * runs read — the propose-only write contract, expressed in Vendo's own terms
  * rather than reimplemented.
  *
- * No `models` block: unset, Vendo's credential ladder resolves the provider
- * key from the environment (OPENAI_API_KEY). The BYO agent route passes its
- * own model to `streamText` directly, so this only feeds Vendo's internal app
- * generation lane.
- */
 
 /**
- * On Vercel we hand Vendo a BUILT MODEL; locally we let its ladder resolve one.
+ * DEFAULT: STOCK VENDO. No `models` block, so Vendo's own credential ladder
+ * runs exactly as shipped. That is deliberate — this install exists to observe
+ * how Vendo behaves for a real third-party host, and a patched install proves
+ * nothing about the product.
  *
- * Vendo's ladder loads the provider by resolving a path at runtime. That cannot
- * be made to work inside a bundled serverless function: a static import gets the
- * package traced into the deployment, `serverExternalPackages` stops it being
- * inlined, and it STILL failed in prod with "OPENAI_API_KEY is set but
- * @ai-sdk/openai is not installed in this app". Both were deployed and verified
- * against live build ids before giving up on them.
+ * The escape hatch below is OPT-IN (`VENDO_FORCE_EXPLICIT_MODEL=1`) and off
+ * everywhere by default. It hands Vendo a model object built from a statically
+ * imported provider, skipping runtime resolution entirely. Turn it on only to
+ * unblock a demo, and remember that it also disables Vendo's mini -> full
+ * escalation — the escalation that produces the reasoning items behind the
+ * dead-thread bug, so a pinned install cannot reproduce it.
  *
- * An explicit model object skips resolution entirely — the provider is imported
- * statically, right here, the ordinary way. `models.agent` takes a
- * `string | LanguageModel`, and an explicit object is the highest-precedence
- * tier in `resolveModels`, so nothing is left to discover at runtime.
+ * WHY THE STOCK PATH FAILS ON VERCEL, for the record:
  *
- * ⚠ WHY IT IS GATED ON `VERCEL` RATHER THAN APPLIED EVERYWHERE. Pinning a model
- * disables Vendo's own mini -> full escalation, and that escalation is what
- * produces the OpenAI Responses reasoning items behind the dead-thread bug we
- * are still trying to reproduce. Pinning globally would silently delete the
- * behaviour under test — which already happened once with VENDO_MODEL. So prod
- * gets the model that works, local dev keeps the ladder that reproduces the bug.
+ *   if (credential.rung === "env-key")     -> BYO provider (@ai-sdk/openai)
+ *   if (credential.rung === "vendo-cloud") -> @ai-sdk/anthropic via the gateway
+ *
+ * The BYO rung is checked first, and OPENAI_API_KEY is set in this app's
+ * environment for the ETI scorer — nothing to do with Vendo. So the ladder
+ * takes the BYO rung and never reaches the Cloud rung, even though VENDO_API_KEY
+ * is present and would have worked: @ai-sdk/anthropic is a dependency of Vendo
+ * itself and resolves from Vendo's own node_modules. The BYO rung is the only
+ * one that must find a package inside the HOST app, which is precisely what a
+ * bundled serverless function cannot do — it resolves a path at runtime
+ * (createRequire + require.resolve + pathToFileURL) and Next traces files by
+ * static imports.
+ *
+ * A static import and `serverExternalPackages` were both tried, deployed, and
+ * verified against live build ids. Neither fixed it. The two configurations
+ * that DO work are: unset OPENAI_API_KEY here so the Cloud rung is reached, or
+ * set VENDO_FORCE_EXPLICIT_MODEL=1 and accept a pinned model.
  */
-const onVercel = process.env.VERCEL === "1";
+const forceExplicitModel = process.env.VENDO_FORCE_EXPLICIT_MODEL === "1";
 const agentModelId = process.env.VENDO_MODEL?.trim() || "gpt-5";
 const paintModelId = process.env.VENDO_MODEL_PAINT?.trim() || "gpt-5-mini";
 
 export const vendo = createVendo({
   policy: "cautious",
   principal: resolvePrincipal,
-  ...(onVercel && {
+  ...(forceExplicitModel && {
     models: {
       agent: openaiProvider.openai(agentModelId),
       paint: openaiProvider.openai(paintModelId),
