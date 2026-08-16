@@ -22,7 +22,8 @@
     "deploy": "firebase deploy",
     "postinstall": "patch-package",
     "predev": "vendo sync --no-ai",
-    "prebuild": "vendo sync --strict --no-ai"
+    "prebuild": "vendo sync --strict --no-ai",
+    "trace:check": "node scripts/trace-check.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.91",

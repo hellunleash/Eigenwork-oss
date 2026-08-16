@@ -51,7 +51,10 @@ async function main(): Promise<void> {
   console.log("  flushed + shut down");
 
   // Read it back rather than asking the operator to eyeball a dashboard.
-  await new Promise((r) => setTimeout(r, 4000));
+  // Langfuse ingestion is an async queue: a 4s wait reported NO for a trace that
+  // landed at +40s, which reads as "tracing is broken" when tracing is fine.
+  // Poll instead of guessing — a positive control that lies is worse than none.
+  await new Promise((r) => setTimeout(r, 8000));
   const auth = Buffer.from(`${publicKey}:${secretKey}`).toString("base64");
   const since = new Date(Date.now() - 300_000).toISOString();
   const res = await fetch(
