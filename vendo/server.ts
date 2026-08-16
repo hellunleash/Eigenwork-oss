@@ -1,6 +1,31 @@
 import { createVendo } from "@vendoai/vendo/server";
 import type { Principal } from "@vendoai/core";
+import * as openaiProvider from "@ai-sdk/openai";
 import { requireOrgMember } from "@/lib/org";
+
+/**
+ * ⚠ THIS IMPORT IS LOAD-BEARING AND MUST NOT BE "CLEANED UP".
+ *
+ * Vendo's credential ladder loads the provider at RUNTIME, by resolved path:
+ *
+ *   const require = createRequire(join(root, "package.json"));
+ *   return await dynamicImport(pathToFileURL(require.resolve(specifier)).href);
+ *
+ * Next traces which files a serverless function needs by following STATIC
+ * imports. Nothing in this app imported `@ai-sdk/openai` statically, so it was
+ * never bundled into the deployed function — and the runtime resolve threw. The
+ * ladder catches any failure and reports `"OPENAI_API_KEY is set but
+ * @ai-sdk/openai is not installed in this app"`, which is wrong in the way that
+ * costs the most time: the package IS installed, it just was not deployed.
+ * Local dev has a real node_modules on disk, so it only fails in production.
+ *
+ * Referencing the namespace (not a bare side-effect import) so no bundler can
+ * tree-shake it back out. Keeping the ladder rather than passing an explicit
+ * model on purpose: an explicit model pins one id and disables the
+ * mini -> full escalation, which is the mechanism behind the dead-thread bug
+ * we still want to reproduce.
+ */
+void openaiProvider.createOpenAI;
 
 /**
  * The Vendo instance for EigenWork's in-app customization surface.
