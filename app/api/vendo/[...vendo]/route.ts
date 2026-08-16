@@ -1,7 +1,9 @@
 import { nextVendoHandler } from "@vendoai/vendo/server";
 import { vendo } from "@/vendo/server";
 import { requireOrgMember } from "@/lib/org";
+import { after } from "next/server";
 import { tracedWire } from "@/lib/observability/vendo-trace";
+import { flushLangfuse } from "@/lib/observability/langfuse";
 
 /**
  * Vendo's wire protocol — the endpoint <VendoProvider baseUrl="/api/vendo">
@@ -42,6 +44,14 @@ function gated(inner: Handler): Handler {
     if (!auth.ok) {
       return Response.json({ error: auth.error }, { status: auth.status });
     }
+    // ⚠ FLUSH OR LOSE EVERYTHING. OTel batches span exports and Vercel freezes
+    // the function the moment it responds, so a batch that has not left the
+    // process is dropped silently — prod showed ZERO traces while local (a
+    // long-lived dev server whose batch timer eventually fires) showed all of
+    // them. `after()` runs once the response is sent, so the flush costs the
+    // caller nothing.
+    after(flushLangfuse);
+
     // The span is opened INSIDE the gate so a rejected stranger never creates
     // one, and so the actor it labels is always a resolved member.
     return tracedWire(inner as (req: Request, ctx: never) => Promise<Response>, () => ({
