@@ -18,9 +18,12 @@
     "qa:interview:recruiter": "npx tsx scripts/qa-interview-recruiter-live.ts",
     "serve": "npm run build && firebase emulators:start --only functions,hosting",
     "deploy": "firebase deploy",
-    "trace:check": "node scripts/trace-check.mjs"
+    "trace:check": "node scripts/trace-check.mjs",
+    "predev": "vendo sync --no-ai",
+    "prebuild": "vendo sync --strict --no-ai"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.97",
     "@google-cloud/documentai": "^9.5.0",
     "@google/generative-ai": "^0.24.1",
     "@langfuse/otel": "^5.10.0",
@@ -31,6 +34,7 @@
     "@paddle/paddle-node-sdk": "^3.5.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
+    "@vendoai/vendo": "^0.24.0",
     "@vercel/otel": "^2.1.3",
     "ai": "^6.0.246",
     "firebase": "^12.8.0",
@@ -43,7 +47,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "swr": "^2.4.0",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "vendoai": "^0.24.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
