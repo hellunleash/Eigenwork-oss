@@ -1,6 +1,6 @@
 # EigenWork
 
-**Technical hiring, right from Slack.** @mention EigenBot, and it screens engineers, ranks your
+**[eigenwork.com](https://www.eigenwork.com)** · **Technical hiring, right from Slack.** @mention EigenBot, and it screens engineers, ranks your
 shortlist, moves candidates through the pipeline and drafts outreach. You don't need to open another tab.
 
 ```
