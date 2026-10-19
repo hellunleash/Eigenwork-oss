@@ -116,14 +116,43 @@ if (overlord && !appliedCap) log("info", "overlord.junior_shadow", { wouldCap: o
 ## Repo map
 
 ```
-app/api/slack/*          events, interactivity (confirm clicks), oauth, install
-app/api/candidate/*      public intake (rate limit + honeypot + Turnstile + PDF checks)
-lib/agent/               EigenBot: loop, tools, org-scoped data layer, budget, audit
-lib/slack/               signature verify, actor auth, dedupe, installations
-lib/evaluation-runner.ts scoring engine
-lib/cards/               result-card validation + deterministic fallbacks
-lib/interview/           AI screen, take-home, system-design rounds
-worker/                  Cloud Run container (scoring, match, cron)
+app/
+  api/slack/             events, interactivity (confirm clicks), oauth, install, status
+  api/candidate/         public intake (rate limit + honeypot + Turnstile + PDF checks), resume, outreach
+  api/jd/                roles: create, public read, candidate match (score ≥ 50 gate), interviews
+  api/interview/         invite, AI screen, take-home, system design, final report
+  api/worker/            in-Vercel fallback for the scoring worker
+  api/org/               workspaces: switch, invite + accept, members, rename
+  api/paddle/            billing webhook (HMAC, idempotent, quantity-bounded)
+  api/kpi/               KPI snapshot read for the dashboard
+  candidate/             candidate intake form
+  interview/             candidate-facing interview rounds
+  user/                  recruiter dashboard: roles, results cards, billing
+  home-v3/, home-v2/     marketing site
+  pricing/, terms/, privacy/, invite/
+
+lib/
+  agent/                 EigenBot: tool loop, tools, org-scoped data layer, budget, audit, memory
+  slack/                 signature verify, actor auth, dedupe, installations, client
+  evaluation-runner.ts   scoring engine (junior + senior tracks, fraud check, result card)
+  eti/                   scoring rubric prompts
+  cards/                 result-card validation + deterministic fallbacks + employer brand cache
+  github-signals.ts      repo DNA signal from a candidate's GitHub
+  github-utils.ts        GitHub App auth (JWT → installation token)
+  docai-extract.ts       resume parsing with Google Document AI
+  interview/             AI screen, take-home, system-design rounds + scorecards
+  match.ts, stage.ts     shortlist + pipeline moves (shared by web routes and the agent)
+  jd*.ts                 role parsing, options, status, role-fit
+  org.ts, auth-*.ts      org model + server/client auth
+  entitlements.ts, paddle.ts, wallet-config.ts   plans + screen wallet
+  rate-limit.ts, turnstile.ts, fingerprint.ts    intake abuse protection
+  kpi/, observability/   analytics types + tracing
+
+worker/                  Cloud Run container: scoring, match, cron, BigQuery KPI rollup
+scripts/                 diagnostics, backfills, QA + calibration tools
+extensions/              Firestore → BigQuery export config
+firestore.rules, storage.rules   deny-all (all access is server-side)
+cloudbuild.yaml          worker image build
 ```
 
 ## Run locally
